@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.benchmarks/
+dist/
+build/
+
+# Rust (only if the execution benchmarks pick it)
+rust/target/
+
+# Secrets — never commit these
+.env*
+!.env.example
+*.pem
+*.key
+
+# Local data and experiment artifacts (Kalshi data must not be redistributed).
+# Anchored to the repo root so src/kalshibot/data/ stays tracked.
+/data/
+*.parquet
+
+# Agent worktrees and per-user settings
+.claude/worktrees/
+.claude/settings.local.json
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

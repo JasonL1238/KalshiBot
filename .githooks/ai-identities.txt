@@ -1,0 +1,6 @@
+noreply@anthropic\.com
+noreply@openai\.com
+cursoragent@cursor\.com
+noreply@aider\.chat
+[0-9]+\+copilot@users\.noreply\.github\.com
+(devin-ai-integration|copilot-swe-agent|copilot|gemini-code-assist|google-labs-jules|claude|cursor|chatgpt-codex-connector|openai-codex)\[bot\]@users\.noreply\.github\.com
