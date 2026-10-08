@@ -5,34 +5,45 @@ explain every piece: where the data comes from, why a backtest result isn't nois
 trade is sized, what stops it from blowing up, and how fast an order reaches the
 exchange. Whether it makes money is a result to measure, not an assumption.
 
-| # | Stage | Question | Where (planned) |
+| # | Stage | Question | Where |
 |---|-------|----------|-----------------|
 | 1 | Ingest + store | Can I replay exactly what I knew at time *t*? | `src/kalshibot/data/` |
 | 2 | Research | Which strategies have edge after fees, beyond what noise explains? | `src/kalshibot/research/`, [STRATEGIES](STRATEGIES.md) |
 | 3 | Validate | Would this result survive the number of things we tried? | `src/kalshibot/research/validation/`, [BACKTESTING](BACKTESTING.md) |
-| 4 | Execute | What is the fastest safe path from signal to order ack? | `src/kalshibot/execution/`, [EXECUTION](EXECUTION.md) |
+| 4 | Execute | What is the fastest safe path from signal to order ack? | `src/kalshibot/execution/` (M5), [EXECUTION](EXECUTION.md) |
 
 ## Milestones
 
 - [x] **Phase 0.** API client, signing, settled-market backfill.
 - [x] **M0. Governance.** Agent-doc tree, attribution enforcement, hygiene tests, docs
   with one home per fact.
-- [ ] **M1. Data and shared types.**
+- [x] **M1. Data and shared types.**
   - Fixed-point units and the dict + price bitmap order book.
-  - Canonical series/events/markets/fee-change tables and the trade tape (Becker
-    dataset + Kalshi API).
+  - Canonical series/events/markets/fee-change tables and the trade tape (Kalshi API,
+    cross-checked against the Becker dataset).
   - Dated fee schedule (`kalshi/fee_history.py`).
   - Point-in-time loader enforcing the research calendar (`research/load.py`).
   - Trial ledger and lockbox gate.
   - WebSocket recorder with a coverage log.
 - [ ] **M2. Backtesting research.**
-  - Shared strategy types (`strategies/base.py`) and the Tier-1 path (fills, settlement).
+  - Tier-1 path (fills, settlement) and Tier-2 engines (NautilusTrader replay, vectorbt
+    bar closes).
   - Engine capability screen.
-  - Validation toolkit: null generator, Romano–Wolf, PBO/CSCV, DSR.
-  - Conformance simulations measuring false-positive rate and power.
-  - Pass rules written down before any confirmation test runs.
+  - Validation toolkit: market-calibrated null, stationary bootstrap, PBO/CSCV, DSR,
+    Romano–Wolf, Holm.
+  - Conformance simulations measuring size and power; the gates chosen from them and
+    written down before any confirmation test runs.
+  - Positive control: the favorite–longshot pattern on discovery data (criterion set;
+    runs when the discovery-period API tape lands).
 - [ ] **M3. Strategy research.**
-  - Pre-register H1–H12 (m = 12, category strata).
+  - Shared strategy types (`strategies/base.py`), with the first strategy.
+  - The research runner: refuses to run without the ledger, logs every evaluation
+    before showing it, and allows one confirmation test per family.
+  - Per-family candle fetching: the candle leg of the taker rule and window-end bids.
+  - A path null (block-resampled, sign-randomized increments within a cluster) for
+    families that exit before settlement, measured in conformance first.
+  - Pre-register H1–H12 (m = 12, category strata), each with its minimum economically
+    meaningful edge and the power at that edge on its own confirmation sample.
   - Run every confirmation test.
   - Apply Holm once.
   - Open the lockbox once for all survivors.
@@ -58,10 +69,13 @@ exchange. Whether it makes money is a result to measure, not an assumption.
 The windows, their dates, and per-hypothesis confirmation starts are defined in
 `src/kalshibot/research/calendar.py`. The rules for using them:
 
-- **Window assignment.** A trade belongs to the window of its decision time. The primary
-  PnL marks positions still open at a window's end at the executable bid then.
-  Settlement-date PnL is secondary and counts only markets whose *as-listed* scheduled
-  close is inside the window. Trades are never filtered on actual settlement time.
+- **Window assignment.** A trade belongs to the window of its decision time. Trades are
+  never filtered on actual settlement time.
+- **Tests count settled positions.** The confirmation and lockbox tests take binary
+  contracts held to settlement, so they count only markets whose *as-listed* scheduled
+  close is inside the window (early-close markets without one are excluded), and
+  decisions in a window's last maximum holding period are embargoed. PnL marked at the
+  executable bid at window end is reported alongside, for anything still open.
 - **No look-ahead across seams.** Anything fitted in a window sees only data visible
   before the window's end (the loader's `as_of`), so labels that settle later are
   invisible. Each window's first maximum holding period is also embargoed, so positions

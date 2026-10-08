@@ -3,7 +3,7 @@
 Windows are half-open UTC intervals; how to use them (marking, settlement-date PnL,
 embargoes): docs/ROADMAP.md, Research calendar.
 
-    discovery     [start, B)                     explore and select only
+    discovery     [DISCOVERY_START, B)           explore and select only
     unused        [B, S_h)                       per hypothesis h, never touched
     confirmation  [max(B, S_h), LOCKBOX_START)   one primary test per hypothesis
     lockbox       [LOCKBOX_START, FORWARD_START) opened once for all survivors, logged
@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+DISCOVERY_START = datetime(2021, 6, 30, tzinfo=UTC)  # Kalshi's first trade (Becker dataset)
 # B: 00:00 UTC the day after the last Becker trade (2025-11-25 22:00:15 UTC).
 BECKER_END = datetime(2025, 11, 26, tzinfo=UTC)
 LOCKBOX_START = datetime(2026, 5, 1, tzinfo=UTC)

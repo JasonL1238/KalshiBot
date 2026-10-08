@@ -5,7 +5,8 @@ strings with up to 2 decimals ("61.04"; contracts can be fractional). Floats can
 these exactly, so every price and size in this codebase is an integer:
 
     price: 1 unit = $0.0001, so a binary contract trades in 0..10_000 (PRICE_SCALE)
-    size:  1 unit = 0.01 contracts
+    size:  1 unit = 0.01 contracts (SIZE_SCALE units per contract)
+    money: price units × size units = $0.000001 (MICROS per dollar)
 
 Kalshi's book lists *bids only*, on both sides. Buying YES at p is the same trade as
 selling NO at 1 − p, so the best YES ask is 10_000 − best NO bid, and vice versa.
@@ -17,6 +18,8 @@ import operator
 from collections.abc import Callable, Iterable
 
 PRICE_SCALE = 10_000  # price units per dollar
+SIZE_SCALE = 100  # size units per contract
+MICROS = PRICE_SCALE * SIZE_SCALE  # micro-dollars per dollar
 
 Level = tuple[int, int]  # (price units, size units)
 

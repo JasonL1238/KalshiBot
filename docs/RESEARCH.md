@@ -61,14 +61,18 @@ API keys, so use it for all execution testing.
   (36,020,641,508 bytes, ETag `18f290309fb5d12915d667fc5ee199e4-4294`, last-modified
   2026-02-05), extracted with `zstd -dc data.tar.zst | tar -xf -` into
   `data/external/becker/`. Kalshi: 72,134,741 trades (2021-06-30 → 2025-11-25 22:00:15
-  UTC) and 7,682,445 markets.
-  - Prices are integer cents.
-  - Some markets traded on a $0.001 grid (`deci_cent`) in late 2025. From 2025-10-09
-    those sub-cent trades are truncated, so YES + NO cents sum to 99. `research/load.py`
-    therefore switches to the API tape at that date.
-  - `pytest -m data` pins the archive (count, last trade, so the calendar's Becker end)
-    and checks it against the API tape both ways on the 15th of each month,
-    2021-07 → 2025-09. Fetch each sample day with
+  UTC) and 7,682,445 markets. Its end date sets the research calendar's discovery seam.
+  - Prices are integer cents. Some markets traded on a $0.001 grid (`deci_cent`) in late
+    2025, and from 2025-10-09 those sub-cent trades are truncated, so YES + NO cents sum
+    to 99.
+  - It lacks whole markets. On the 15th of each month, 2021-07 → 2025-09, every Becker
+    trade is in the API tape with identical fields, but 6,733 of 1,109,042 API trades
+    (0.6%) are not in Becker. All of them belong to 3,714 markets Becker lacks entirely,
+    mostly hourly crypto, FX, and index series (KXBTC, KXEURUSDH, KXNASDAQ100U, …) and
+    POPVOTE. Research therefore reads the API tape for every date
+    (`research/load.py`), and Becker serves as the independent cross-check.
+  - `pytest -m data` pins the archive (count, last trade, so the calendar's seam) and
+    reruns that cross-check. Fetch each sample day with
     `kalshibot backfill trades --start 2021-07-15 --end 2021-07-16` (and so on).
 
 ### Data formats ✅

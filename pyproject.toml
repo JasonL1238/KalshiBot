@@ -5,14 +5,19 @@ description = "A research and trading system for Kalshi prediction markets"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "arch>=7",
     "cryptography>=42",
     "duckdb>=1.1",
     "httpx>=0.27",
+    "nautilus_trader==1.230.0",
     "numpy>=2.0",
     "pandas>=2.2",
     "pyarrow>=16",
     "python-dotenv>=1.0",
+    "scikit-learn>=1.5",
+    "scipy>=1.13",
     "typer>=0.12",
+    "vectorbt==1.0.0",
     "websockets>=13",
 ]
 
@@ -32,6 +37,7 @@ packages = ["src/kalshibot"]
 [tool.ruff]
 line-length = 100
 target-version = "py313"
+extend-exclude = ["benchmarks/engine_screen"]  # see benchmarks/engine_screen/AGENTS.md
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
