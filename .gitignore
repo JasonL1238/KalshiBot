@@ -6,7 +6,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .benchmarks/
-benchmarks/engine_screen/out/
 dist/
 build/
 

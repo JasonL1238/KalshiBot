@@ -80,8 +80,8 @@ do what typical backtests on trade data do; Tier 1 is deliberately harsher.
 Each engine was installed and run on the same two-market weekend tape: a signal, a
 sub-penny fill at the next print, a per-fill Kalshi fee, binary settlement, and 1M events
 for speed (Apple M4 Pro, Python 3.13; LEAN runs its own 3.11). Qlib was reviewed from
-source only. The probes are in
-`benchmarks/engine_screen/` at the commit that adds this table.
+source only. The probes, with how to run each, are in `benchmarks/engine_screen/` at
+commit 754e472.
 
 ✓ native, ◐ with a workaround, ✗ no.
 

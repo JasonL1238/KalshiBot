@@ -37,7 +37,6 @@ packages = ["src/kalshibot"]
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-extend-exclude = ["benchmarks/engine_screen"]  # see benchmarks/engine_screen/AGENTS.md
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
