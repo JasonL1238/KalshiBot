@@ -18,6 +18,10 @@ from dotenv import dotenv_values
 # the demo exchange has fake markets with no real price discovery.
 MARKET_DATA_URL = "https://external-api.kalshi.com/trade-api/v2"
 
+# Requests per second to stay under the Basic read limit (docs/RESEARCH.md §1, Rate limits),
+# with headroom for the more expensive endpoints.
+READ_BUDGET = 8
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 

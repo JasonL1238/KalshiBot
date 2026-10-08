@@ -6,13 +6,15 @@ pass thresholds) is written and pre-registered in M2, before any confirmation te
 
 ## Pitfalls every backtest here must handle
 
-1. **Information time ≠ nominal time.** A row is usable only after its `available_at`.
-   That covers forecast runs, macro releases, index closes, and market metadata that
-   is only known at settlement.
+1. **Information time ≠ nominal time.** Research sees a market only after it was listed,
+   and its post-hoc columns (result, volume, an early close) only after it settled
+   (`research/load.py`). External series (forecast runs, macro releases, index closes)
+   are keyed by publication time, not observation time, when they arrive in M3.
 2. **Executable prices.** Trade at the ask or bid that existed after the decision,
    never at the last trade or the print that triggered the signal.
-3. **Dated fees.** Fees vary by series and change over time
-   (`kalshibot.kalshi.fees`; the dated history arrives in M1).
+3. **Dated fees.** Fees vary by series and change over time. Price every fill with
+   the terms in force then (`kalshibot.kalshi.fee_history`), and bracket windows where
+   the switch date is unknown (`FeeTerms.uncertain`).
 4. **Fills.** Resting orders get adversely selected, and queue position is invisible
    without L3 data. Maker fills require the price to trade through.
 5. **Settlement rules change.** For example, weather settlement sources changed in Aug

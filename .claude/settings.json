@@ -5,6 +5,10 @@
     "sessionUrl": false
   },
   "permissions": {
-    "deny": ["Read(~/.kalshi/**)"]
+    "deny": [
+      "Read(~/.kalshi/**)",
+      "Bash(*bench-orders*)",
+      "Bash(*KALSHIBOT_ALLOW_ORDERS*)"
+    ]
   }
 }

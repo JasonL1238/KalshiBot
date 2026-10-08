@@ -32,22 +32,44 @@ API keys, so use it for all execution testing.
 
 ### Public market data (no auth) ✅
 - `GET /markets` (filters: `series_ticker`, `event_ticker`, `status` = open|closed|settled…,
-  `limit` ≤ 1000, `cursor`). Responses say `status: "active"` but the filter value is `open`.
-- `GET /series/{t}`, `GET /events/{t}`, `GET /markets/{t}`
+  `mve_filter` = only|exclude for combo markets, `limit` ≤ 1000, `cursor`). Responses say
+  `status: "active"` but the filter value is `open`.
+- `GET /series` returns every series (~15k) in one response; `GET /series/{t}` one series.
+- `GET /events` (`limit` ≤ 200) covers settled events too; there is no `/historical/events`.
+- `GET /series/fee_changes?show_historical=true`: logged per-series fee changes. The log
+  starts 2025-10-04 and records only the new value. Earlier fee history, with sources:
+  `kalshi/fee_history.json`.
 - `GET /markets/{t}/orderbook?depth=`, plus **`GET /markets/orderbooks?tickers=A&tickers=B`**
   (≤ 100 at once, all from the same instant)
-- `GET /markets/trades`, `GET /series/{s}/markets/{t}/candlesticks` (1, 60, or 1440 min)
-- `GET /historical/cutoff`, `/historical/markets`, `/historical/trades`,
-  `/historical/markets/{t}/candlesticks`
+- `GET /markets/trades` and `/historical/trades` take `min_ts` (inclusive) and `max_ts`
+  (**exclusive**), in whole seconds.
+- Candlesticks (1, 60, or 1440 min; OHLC of `yes_bid`, `yes_ask`, and trade price):
+  `GET /series/{s}/markets/{t}/candlesticks` for live markets and
+  `/historical/markets/{t}/candlesticks` for archived ones.
 
 ### Historical data ✅
-- Settled markets older than the cutoff (currently **2026-08-04**) disappear from live
-  endpoints and move to `/historical/*`. A full backfill reads both (see `data/backfill.py`).
+- Each night at 00:00 UTC a cutoff advances by a day. Settled markets and trades older
+  than it leave the live endpoints and are served only by `/historical/*`. Read the
+  current cutoffs (`market_settled_ts`, `trades_created_ts`) from `GET /historical/cutoff`.
+  `data/backfill.py` picks the archive per day.
+- `/historical/markets` accepts `mve_filter=exclude` but returns 400 for `mve_filter=only`.
 - History goes back to the start of each series (NYC highs: Aug 2021) at trade level.
 - **No historical orderbook depth anywhere.** You only get book data by recording it
-  yourself, so run the snapshot collector early and keep it running.
-- Open dataset: [Jon-Becker/prediction-market-analysis](https://github.com/jon-becker/prediction-market-analysis),
-  ~36 GiB of Kalshi + Polymarket trades in Parquet.
+  yourself, so run the recorder early and keep it running.
+- Open dataset: [Jon-Becker/prediction-market-analysis](https://github.com/jon-becker/prediction-market-analysis)
+  (MIT repo). Downloaded 2026-10-08 from `https://s3.jbecker.dev/data.tar.zst`
+  (36,020,641,508 bytes, ETag `18f290309fb5d12915d667fc5ee199e4-4294`, last-modified
+  2026-02-05), extracted with `zstd -dc data.tar.zst | tar -xf -` into
+  `data/external/becker/`. Kalshi: 72,134,741 trades (2021-06-30 → 2025-11-25 22:00:15
+  UTC) and 7,682,445 markets.
+  - Prices are integer cents.
+  - Some markets traded on a $0.001 grid (`deci_cent`) in late 2025. From 2025-10-09
+    those sub-cent trades are truncated, so YES + NO cents sum to 99. `research/load.py`
+    therefore switches to the API tape at that date.
+  - `pytest -m data` pins the archive (count, last trade, so the calendar's Becker end)
+    and checks it against the API tape both ways on the 15th of each month,
+    2021-07 → 2025-09. Fetch each sample day with
+    `kalshibot backfill trades --start 2021-07-15 --end 2021-07-16` (and so on).
 
 ### Data formats ✅
 - Prices are fixed-point dollar strings (`"0.5600"`), up to 4 decimals. Integer-cent
@@ -56,6 +78,11 @@ API keys, so use it for all execution testing.
 - Each market has `price_ranges` (`{start, end, step}`) defining legal tick sizes; some
   markets have sub-penny ticks near 0 and 1. Snap order prices to `step`.
 - The orderbook returns **bids only** for YES and NO, ascending. Best YES ask = 1 − best NO bid.
+- WebSocket books ([docs](https://docs.kalshi.com/websockets/orderbook-updates)):
+  `orderbook_snapshot` msgs carry `market_ticker` plus `yes_dollars_fp` / `no_dollars_fp`
+  `[price, size]` string pairs, and a side's key is omitted when that side is empty.
+  `orderbook_delta` msgs carry `price_dollars`, a signed `delta_fp`, `side`, and `ts_ms`.
+  Every msg has `sid` and `seq`, which must be contiguous per subscription.
 
 ### Orders
 - Use **V2** endpoints: `POST /portfolio/events/orders`. Legacy `/portfolio/orders` is dead.
@@ -69,8 +96,8 @@ API keys, so use it for all execution testing.
 - [docs: create order v2](https://docs.kalshi.com/api-reference/orders/create-order-v2)
 
 ### Fees
-- The fee model (formula, maker shares by `fee_type`, rounding) lives in
-  `kalshibot.kalshi.fees`.
+- Fee mechanics live in `kalshibot.kalshi.fees`, and which terms applied when (maker
+  shares by `fee_type`, dated regimes) in `kalshibot.kalshi.fee_history`.
 - Read `fee_type` / `fee_multiplier` from `GET /series/{t}`, and upcoming changes from
   `GET /series/fee_changes`. Never hard-code them.
 - ✅ `KXHIGHNY`: `fee_type=quadratic`, multiplier 1, so **makers pay nothing**.

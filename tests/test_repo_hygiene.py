@@ -168,6 +168,23 @@ def test_only_the_repo_gitignore_ignores_files():
     assert real == [], f"repo .gitignore swallows: {real}"
 
 
+def test_ledgers_only_ever_grow():
+    """Every ledger file ever committed still exists, and each committed version is a
+    prefix of every later one and of the working copy: no trial (or unlock) can be dropped,
+    which would shrink DSR's N or let the lockbox open twice."""
+    ever = set(git("log", "--all", "--format=", "--name-only", "--", "ledger/").split())
+    current = {p.relative_to(ROOT).as_posix() for p in (ROOT / "ledger").glob("*.jsonl")}
+    for rel in sorted(ever | current):
+        path = ROOT / rel
+        assert path.exists(), f"{rel} was deleted"
+        commits = git("log", "--reverse", "--format=%H", "--", rel).split()
+        versions = [git("show", f"{c}:{rel}") for c in commits] + [path.read_text()]
+        for older, newer in zip(versions, versions[1:], strict=False):
+            assert newer.startswith(older), f"{rel} was rewritten, not appended to"
+        if rel == "ledger/lockbox.jsonl":
+            assert len(path.read_text().splitlines()) == 1, "the lockbox opens once"
+
+
 def test_governance_files_are_tracked_and_env_files_are_not():
     if not has_commits():
         pytest.skip("no commits yet")
@@ -196,6 +213,27 @@ def test_imported_names_resolves_nested_and_relative_imports():
     source = "def f():\n    from .. import research\n    from ..research.x import y\n"
     assert {"kalshibot.research", "kalshibot.research.x"} <= imported_names(
         source, "kalshibot.execution")
+
+
+def test_runtime_dependencies_match_imports():
+    import tomllib
+    from importlib.metadata import packages_distributions
+
+    declared = {re.split(r"[<>=!~\[ ]", d)[0].lower().replace("_", "-") for d in tomllib.loads(
+        (ROOT / "pyproject.toml").read_text())["project"]["dependencies"]}
+    dists = packages_distributions()
+    used = set()
+    for path in (ROOT / "src").rglob("*.py"):
+        pkg = ".".join(path.relative_to(ROOT / "src").parent.parts)
+        for name in imported_names(path.read_text(), pkg):
+            top = name.split(".")[0]
+            if top in sys.stdlib_module_names or top == "kalshibot" or top not in dists:
+                continue
+            owners = {d.lower().replace("_", "-") for d in dists[top]}
+            assert owners & declared, (
+                f"{path.relative_to(ROOT)} imports {top}, which pyproject.toml doesn't declare")
+            used |= owners
+    assert declared <= used, f"declared but never imported: {sorted(declared - used)}"
 
 
 @pytest.mark.parametrize("package, forbidden", LAYERS.items())

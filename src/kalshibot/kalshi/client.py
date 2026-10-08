@@ -3,7 +3,8 @@
 Design notes:
 - Public market-data endpoints need no auth; portfolio/trading endpoints do.
 - List endpoints are cursor-paginated; `_paginate` hides that behind a generator.
-- 429 (rate limited) and 5xx responses are retried with exponential backoff.
+- GETs are retried with exponential backoff on 429 (rate limited), 5xx, and dropped
+  connections. Nothing else is ever retried: a resent order could fill twice.
 - Kalshi moves settled markets older than a cutoff into `/historical/*` endpoints.
   `historical_cutoff()` tells you where the split is, so a full backfill reads both.
 """
@@ -31,7 +32,7 @@ class KalshiClient:
         signer: KalshiSigner | None = None,
         *,
         timeout: float = 20.0,
-        max_retries: int = 5,
+        max_retries: int = 8,
         min_interval: float = 0.1,
     ):
         self._http = httpx.Client(
@@ -75,11 +76,19 @@ class KalshiClient:
             raise RuntimeError(f"{method} {path} requires credentials; see .env.example")
         params = {k: v for k, v in (params or {}).items() if v is not None}
 
-        for attempt in range(self._max_retries + 1):
+        retries = self._max_retries if method == "GET" else 0
+        for attempt in range(retries + 1):
             self._throttle()
             headers = self._signer.headers(method, self._path_prefix + path) if auth else None
-            resp = self._http.request(method, path, params=params, json=json, headers=headers)
-            if resp.status_code not in RETRYABLE_STATUS or attempt == self._max_retries:
+            try:
+                resp = self._http.request(method, path, params=params, json=json,
+                                          headers=headers)
+            except httpx.TransportError:
+                if attempt == retries:
+                    raise
+                time.sleep(min(2**attempt * 0.5, 30))
+                continue
+            if resp.status_code not in RETRYABLE_STATUS or attempt == retries:
                 break
             retry_after = resp.headers.get("Retry-After")
             time.sleep(float(retry_after) if retry_after else min(2**attempt * 0.5, 30))
@@ -107,6 +116,19 @@ class KalshiClient:
     def get_series(self, series_ticker: str) -> dict[str, Any]:
         return self._request("GET", f"/series/{series_ticker}")["series"]
 
+    def get_all_series(self) -> list[dict[str, Any]]:
+        """Every series in one response: category, fee_type, fee_multiplier, ..."""
+        return self._request("GET", "/series")["series"]
+
+    def get_fee_changes(self) -> list[dict[str, Any]]:
+        """Logged per-series fee changes (coverage: docs/RESEARCH.md §1)."""
+        return self._request("GET", "/series/fee_changes",
+                             params={"show_historical": "true"})["series_fee_change_arr"]
+
+    def iter_events(self, *, status: str | None = None) -> Iterator[dict[str, Any]]:
+        """All events, including settled ones (there is no /historical/events)."""
+        return self._paginate("/events", "events", {"status": status}, limit=200)
+
     def get_event(self, event_ticker: str, *, with_markets: bool = True) -> dict[str, Any]:
         return self._request("GET", f"/events/{event_ticker}",
                              params={"with_nested_markets": with_markets})
@@ -122,14 +144,16 @@ class KalshiClient:
         status: str | None = None,
         min_close_ts: int | None = None,
         max_close_ts: int | None = None,
+        mve_filter: str | None = None,
     ) -> Iterator[dict[str, Any]]:
-        """status: unopened | open | closed | settled"""
+        """status: unopened | open | closed | settled; mve_filter: only | exclude (combos)."""
         return self._paginate("/markets", "markets", {
             "series_ticker": series_ticker,
             "event_ticker": event_ticker,
             "status": status,
             "min_close_ts": min_close_ts,
             "max_close_ts": max_close_ts,
+            "mve_filter": mve_filter,
         })
 
     # ---- live market data (public) --------------------------------------------------
@@ -155,14 +179,16 @@ class KalshiClient:
                               {"ticker": ticker, "min_ts": min_ts, "max_ts": max_ts})
 
     def get_candlesticks(
-        self, series_ticker: str, ticker: str, *, start_ts: int, end_ts: int,
-        period_interval: int = 60,
+        self, ticker: str, *, start_ts: int, end_ts: int, period_interval: int = 60,
+        series_ticker: str | None = None,
     ) -> list[dict[str, Any]]:
-        """period_interval is in minutes: 1, 60, or 1440."""
-        return self._request(
-            "GET", f"/series/{series_ticker}/markets/{ticker}/candlesticks",
-            params={"start_ts": start_ts, "end_ts": end_ts, "period_interval": period_interval},
-        )["candlesticks"]
+        """OHLC of yes_bid, yes_ask, and trade price. period_interval is in minutes: 1, 60,
+        or 1440. Live markets need `series_ticker`; markets settled before
+        `historical_cutoff()` are only served without it, from the historical archive."""
+        path = (f"/series/{series_ticker}/markets/{ticker}/candlesticks" if series_ticker
+                else f"/historical/markets/{ticker}/candlesticks")
+        params = {"start_ts": start_ts, "end_ts": end_ts, "period_interval": period_interval}
+        return self._request("GET", path, params=params)["candlesticks"]
 
     # ---- historical archive (public) ------------------------------------------------
 
@@ -170,10 +196,12 @@ class KalshiClient:
         return self._request("GET", "/historical/cutoff")
 
     def iter_historical_markets(
-        self, *, series_ticker: str | None = None, event_ticker: str | None = None
+        self, *, series_ticker: str | None = None, event_ticker: str | None = None,
+        mve_filter: str | None = None,
     ) -> Iterator[dict[str, Any]]:
-        return self._paginate("/historical/markets", "markets",
-                              {"series_ticker": series_ticker, "event_ticker": event_ticker})
+        return self._paginate("/historical/markets", "markets", {
+            "series_ticker": series_ticker, "event_ticker": event_ticker, "mve_filter": mve_filter,
+        })
 
     def iter_historical_trades(
         self, *, ticker: str | None = None, min_ts: int | None = None, max_ts: int | None = None

@@ -5,11 +5,12 @@ top-level data directory).
 
 | File | What |
 |------|------|
-| `backfill.py` | Every settled market in a series, from historical and live endpoints → `raw/markets/{series}.parquet` |
-| `snapshot.py` | REST order-book snapshots, Hive-partitioned: `raw/snapshots/series=…/date=…/HHMMSS.parquet` |
+| `backfill.py` | Kalshi reference tables (series, events, non-combo markets, fee changes) and the trade tape by UTC day → `raw/kalshi/` (`kalshibot backfill reference` / `trades`) |
+| `record.py` | `kalshibot record`: raw WS frames + receive ns → `raw/ws/date=…/*.parquet`; coverage log (connect, subscribed sid/channel/tickers, gap, disconnect, error, stop) → `raw/ws/coverage.jsonl` |
 
 ## Invariants
 
 - Book history exists only if we record it ([RESEARCH §1](../../../docs/RESEARCH.md)).
-- Every derived row must say when its information became available (`available_at`).
-  The M1 loaders will filter on it so backtests can't see the future.
+- Raw tables keep everything, including columns only known after settlement. What
+  research may see when is decided in `research/load.py` (post-hoc columns appear once
+  `settlement_ts < as_of`).

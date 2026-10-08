@@ -4,10 +4,11 @@ from math import ceil, floor
 import numpy as np
 import pytest
 
+from kalshibot.kalshi.fee_history import FeeTerms
 from kalshibot.kalshi.fees import DIRECT_MEMBER, FCM_MEMBER, OrderFees, fee
 
-TAKER = {"fee_type": "quadratic", "multiplier": 1}
-MAKER_SERIES = {"fee_type": "quadratic_with_maker_fees", "multiplier": 1}
+TAKER = {"terms": FeeTerms.from_series("quadratic", 1, "balance")}
+MAKER_SERIES = {"terms": FeeTerms.from_series("quadratic_with_maker_fees", 1, "balance")}
 
 
 def reference(price, count, *, buy, precision, rate=Fraction(7, 100), mult=1):
@@ -54,8 +55,7 @@ def test_random_fill_sequences_stay_on_grid_and_never_go_negative():
     rng = np.random.default_rng(1)
     for precision in (DIRECT_MEMBER, FCM_MEMBER):
         for _ in range(300):
-            order = OrderFees(fee_type="quadratic_with_maker_fees", multiplier=1,
-                              precision=precision)
+            order = OrderFees(**MAKER_SERIES, precision=precision)
             for _ in range(rng.integers(1, 8)):
                 p, c = int(rng.integers(1, 10_000)), int(rng.integers(1, 5_000))
                 buy, maker = bool(rng.integers(2)), bool(rng.integers(2))
@@ -86,8 +86,8 @@ def test_maker_fees_depend_on_series_fee_type():
     assert fee(5000, 10_000, buy=True, **TAKER, maker=True, precision=FCM_MEMBER) == 0
     assert fee(5000, 10_000, buy=True, **MAKER_SERIES, maker=True,
                precision=FCM_MEMBER) == 440_000  # $0.4375 → $0.44
-    assert fee(5000, 10_000, buy=True, fee_type="quadratic_with_combo_maker_fees",
-               multiplier=1, maker=True, precision=FCM_MEMBER) == 880_000
+    combo = FeeTerms.from_series("quadratic_with_combo_maker_fees", 1, "balance")
+    assert fee(5000, 10_000, buy=True, terms=combo, maker=True, precision=FCM_MEMBER) == 880_000
     # Exact $20.56000000000275 must round up; floats would give $20.56.
     assert fee(1369, 994_307, buy=False, **MAKER_SERIES, maker=True,
                precision=FCM_MEMBER) == reference(1369, 994_307, buy=False,
@@ -98,9 +98,9 @@ def test_vectorized_matches_reference():
     rng = np.random.default_rng(0)
     prices, counts = rng.integers(0, 10_001, 2_000), rng.integers(0, 10**7, 2_000)
     buys = rng.integers(0, 2, 2_000).astype(bool)
+    terms = FeeTerms.from_series("quadratic", "1.5", "balance")
     for precision in (DIRECT_MEMBER, FCM_MEMBER):
-        out = fee(prices, counts, buy=buys, fee_type="quadratic", multiplier="1.5",
-                  precision=precision)
+        out = fee(prices, counts, buy=buys, terms=terms, precision=precision)
         for p, c, b, f in zip(prices, counts, buys, out, strict=True):
             assert f == reference(int(p), int(c), buy=bool(b), precision=precision, mult="1.5")
 
@@ -119,13 +119,30 @@ def test_bad_inputs_rejected(price, count):
 
 def test_bad_series_parameters_rejected():
     with pytest.raises(ValueError):
-        fee(5000, 100, buy=True, fee_type="flat", multiplier=1, precision=FCM_MEMBER)
+        FeeTerms.from_series("flat", 1, "balance")
     with pytest.raises(ValueError):
-        fee(5000, 100, buy=True, fee_type="quadratic", multiplier=0, precision=FCM_MEMBER)
+        FeeTerms.from_series("quadratic", -1, "balance")
+
+
+def test_waived_series_still_pay_balance_rounding():
+    zero = {"terms": FeeTerms.from_series("quadratic", "0", "balance")}
+    assert fee(5000, 100, buy=True, **zero, precision=FCM_MEMBER) == 0  # $0.50 is on the grid
+    assert fee(550, 100, buy=True, **zero, precision=FCM_MEMBER) == 5_000  # $0.055 → $0.06
     with pytest.raises(TypeError):
-        fee(5000, 100, buy=True)  # fee_type, multiplier, and precision are required
+        fee(5000, 100, buy=True)  # terms and precision are required
     for bad in (0, -100, 0.01):
         with pytest.raises(ValueError):
             fee(550, 100, buy=True, **TAKER, precision=bad)
         with pytest.raises(ValueError):
             OrderFees(**TAKER, precision=bad)
+
+
+def test_cent_rounding_regime_matches_the_old_schedules():
+    old = FeeTerms(Fraction(14, 100), Fraction(0), Fraction(0), "cent")
+    assert fee(5500, 100, buy=True, terms=old, precision=FCM_MEMBER) == 40_000  # PDF: $0.04
+    assert fee(5000, 10_000, buy=True, terms=old, precision=FCM_MEMBER) == 3_500_000  # $3.50
+    flat = FeeTerms(Fraction(7, 100), Fraction(0), Fraction(25, 10_000), "cent")
+    assert fee(5000, 500, buy=True, terms=flat, maker=True, precision=FCM_MEMBER) == 20_000
+    # Cent rounding ignores principal alignment: $0.055 x 1 pays ceil($0.00364) = 1 cent.
+    cent = FeeTerms(Fraction(7, 100), Fraction(0), Fraction(0), "cent")
+    assert fee(550, 100, buy=True, terms=cent, precision=FCM_MEMBER) == 10_000

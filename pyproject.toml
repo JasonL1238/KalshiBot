@@ -5,17 +5,19 @@ description = "A research and trading system for Kalshi prediction markets"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "httpx>=0.27",
     "cryptography>=42",
+    "duckdb>=1.1",
+    "httpx>=0.27",
     "numpy>=2.0",
     "pandas>=2.2",
     "pyarrow>=16",
     "python-dotenv>=1.0",
     "typer>=0.12",
+    "websockets>=13",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff>=0.6", "hypothesis>=6", "sortedcontainers>=2.4"]
 
 [project.scripts]
 kalshibot = "kalshibot.cli:app"
