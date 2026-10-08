@@ -88,6 +88,10 @@ class MockKalshi:
 
 
 def run_recorder(tmp_path, server, tickers, until, refresh=60.0, flush_frames=100_000):
+    """Run `record` against `server` until `until()` holds, cancel it, and return the
+    coverage events. Cancelling drops every frame the recorder has not yet handled, so
+    `until` must test the recorder's side (its log, its frames), never the server's or
+    the clock's, and must imply everything the test then asserts."""
     async def main():
         async with serve(server, "127.0.0.1", 0) as srv:
             port = srv.sockets[0].getsockname()[1]
@@ -95,17 +99,25 @@ def run_recorder(tmp_path, server, tickers, until, refresh=60.0, flush_frames=10
             task = asyncio.create_task(record(signer, tickers, tmp_path, ["orderbook_delta"],
                                               url=f"ws://127.0.0.1:{port}", refresh=refresh,
                                               flush_frames=flush_frames))
-            for _ in range(200):
-                await asyncio.sleep(0.02)
-                if until():
-                    break
+            try:
+                async with asyncio.timeout(30):
+                    while not until():
+                        if task.done():
+                            task.result()  # record() only ends early by raising; surface it
+                        await asyncio.sleep(0.02)
+            except TimeoutError:
+                pytest.fail(f"`until` never held; coverage log: {coverage(tmp_path)}")
             task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await task
 
     asyncio.run(main())
-    lines = (tmp_path / "coverage.jsonl").read_text().splitlines()
-    return [json.loads(line) for line in lines]
+    return coverage(tmp_path)
+
+
+def coverage(tmp_path):
+    log = tmp_path / "coverage.jsonl"
+    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
 
 
 def frames(tmp_path):
@@ -118,8 +130,7 @@ def test_record_logs_a_gap_keeps_every_frame_and_stops_cleanly(tmp_path):
                          delta(7, 4, "0.4200", "1.00")])
 
     def gapped():
-        log = tmp_path / "coverage.jsonl"
-        return log.exists() and '"gap"' in log.read_text()
+        return "gap" in [e["event"] for e in coverage(tmp_path)]
 
     events = run_recorder(tmp_path, server, lambda: ["T"], gapped)
     kinds = [e["event"] for e in events]
@@ -137,23 +148,25 @@ def test_markets_listed_while_connected_get_subscribed(tmp_path):
         calls.append(1)
         return universe[min(len(calls) - 1, 1)]
 
-    events = run_recorder(tmp_path, server, tickers, lambda: len(server.subscribes) >= 2,
-                          refresh=0.05)
-    assert server.subscribes[:2] == [["T"], ["NEW"]]
-    assert ["NEW"] in [e.get("tickers") for e in events if e["event"] == "subscribed"]
+    def subscribed():
+        return [e["tickers"] for e in coverage(tmp_path) if e["event"] == "subscribed"]
+
+    run_recorder(tmp_path, server, tickers, lambda: ["NEW"] in subscribed(), refresh=0.05)
+    assert server.subscribes == subscribed() == [["T"], ["NEW"]]
 
 
-def test_cancel_writes_buffered_frames_and_logs_stop(tmp_path):
+def test_cancel_writes_buffered_frames_and_logs_stop(tmp_path, monkeypatch):
     server = MockKalshi([snapshot(7, 1), delta(7, 2, "0.4100", "1.00")])
-    seen = []
+    original, buffered = Recorder.add, []
 
-    def got_frames():
-        seen.append(1)
-        return len(seen) > 10  # let a few frames arrive, then cancel
+    def spying_add(self, recv_ns, frame):
+        buffered.append(frame)
+        return original(self, recv_ns, frame)
 
-    events = run_recorder(tmp_path, server, lambda: ["T"], got_frames)
+    monkeypatch.setattr(Recorder, "add", spying_add)
+    events = run_recorder(tmp_path, server, lambda: ["T"], lambda: len(buffered) >= 3)
     assert events[-1]["event"] == "stop"
-    assert len(frames(tmp_path)) >= 3  # ack + snapshot + delta, all buffered at cancel
+    assert frames(tmp_path) == buffered  # ack + snapshot + delta, all buffered at cancel
 
 
 def test_slow_disk_writes_do_not_stall_receive_timestamps(tmp_path, monkeypatch):
@@ -176,7 +189,7 @@ def test_slow_disk_writes_do_not_stall_receive_timestamps(tmp_path, monkeypatch)
             for seq in range(2, 80):
                 await ws.send(json.dumps(delta(7, seq, "0.4100", "1.00")))
                 await asyncio.sleep(0.01)
-            await asyncio.sleep(2)
+            await ws.wait_closed()  # closing would make the recorder reconnect and replay
 
     server = Steady([])
 
