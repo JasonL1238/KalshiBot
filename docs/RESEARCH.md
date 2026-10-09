@@ -135,7 +135,10 @@ API keys, so use it for all execution testing.
   scored on random one-second snapshots, until 2027-01-01; it excludes affiliates and
   employees, IBs and FCMs and their customers, and non-US users
   ([help](https://help.kalshi.com/en/articles/13823851-liquidity-incentive-program)).
-  ✅ Current programs, per market: `GET /incentive_programs` (public).
+  ✅ `GET /incentive_programs` (public, paged by `next_cursor`) lists one program per
+  market and window, with `status` upcoming, active, closed or paid_out; ended ones stay
+  served. On 2026-10-09 most active programs ran for a day or a week, and most others
+  for 15 minutes.
 - The **Volume Incentive Program** ends no earlier than 2026-10-13
   ([CFTC filing](https://www.cftc.gov/filings/orgrules/rules09282630083.pdf)); CFTC staff
   letter [26-23](https://www.cftc.gov/csl/26-23/download) warns exchanges against

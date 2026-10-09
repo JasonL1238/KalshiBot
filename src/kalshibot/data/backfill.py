@@ -4,6 +4,8 @@
     events.parquet        every event: series_ticker, mutually_exclusive, strike_date
     markets.parquet       every market, live and historical archives, with rules text
     fee_changes.parquet   Kalshi's logged per-series fee changes
+    incentive_programs.parquet   every incentive program seen, ended ones included: a
+                          market's reward per window for two-sided depth
     trades/date=YYYY-MM-DD/part.parquet   the trade tape, one file per finished UTC day
     candles/date=YYYY-MM-DD/<ticker>.parquet   1-minute candles (YES bid, YES ask and
                           trade price OHLC, volume, open interest), fetched only for
@@ -22,7 +24,7 @@ import json
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
-from itertools import batched
+from itertools import batched, chain
 from pathlib import Path
 from typing import Any
 
@@ -50,10 +52,11 @@ def kalshi_dir(data_dir: Path) -> Path:
     return data_dir / "raw" / "kalshi"
 
 
-def public_clients(workers: int) -> Callable[[], KalshiClient]:
+def public_clients(workers: int, **options) -> Callable[[], KalshiClient]:
     """Clients for `workers` parallel fetchers that together stay within the API's read
-    budget."""
-    return lambda: KalshiClient(MARKET_DATA_URL, min_interval=workers / READ_BUDGET)
+    budget (`options`: KalshiClient's, such as max_retries)."""
+    return lambda: KalshiClient(MARKET_DATA_URL, min_interval=workers / READ_BUDGET,
+                                **options)
 
 
 def _write(rows: Iterable[dict[str, Any]], path: Path, schema: pa.Schema) -> Path:
@@ -120,6 +123,39 @@ def backfill_fee_changes(client: KalshiClient, out: Path) -> Path:
         "fetched_at": _now(),
     } for f in client.get_fee_changes() if not is_combo(f["series_ticker"]))
     return _write(rows, out / "fee_changes.parquet", FEE_CHANGE_SCHEMA)
+
+
+PROGRAM_SCHEMA = pa.schema([
+    ("id", pa.string()), ("market_ticker", pa.string()), ("incentive_type", pa.string()),
+    ("incentive_description", pa.string()), ("start_date", UTC_TS), ("end_date", UTC_TS),
+    ("period_reward", pa.int64()),  # as served; its unit is unverified
+    ("target_size", pa.int64()), ("discount_factor_bps", pa.int64()), ("paid_out", pa.bool_()),
+    ("fetched_at", UTC_TS),
+])
+
+
+def backfill_incentive_programs(client: KalshiClient, out: Path) -> Path:
+    """Every program, once each (pages can shift while new ones are added). Programs a
+    previous run saw and Kalshi no longer serves are kept."""
+    path = out / "incentive_programs.parquet"
+    programs = {p["id"]: p for p in client.iter_incentive_programs()
+                if not is_combo(p["market_ticker"])}
+    kept = ([r for r in pq.read_table(path).to_pylist() if r["id"] not in programs]
+            if path.exists() else [])
+    rows = chain(kept, ({
+        "id": p["id"],
+        "market_ticker": p["market_ticker"],
+        "incentive_type": p.get("incentive_type"),
+        "incentive_description": p.get("incentive_description"),
+        "start_date": _ts(p.get("start_date")),
+        "end_date": _ts(p.get("end_date")),
+        "period_reward": p.get("period_reward"),
+        "target_size": optional_units(size_units, p.get("target_size_fp")),
+        "discount_factor_bps": p.get("discount_factor_bps"),
+        "paid_out": p.get("paid_out"),
+        "fetched_at": _now(),
+    } for p in programs.values()))
+    return _write(rows, path, PROGRAM_SCHEMA)
 
 
 EVENT_SCHEMA = pa.schema([

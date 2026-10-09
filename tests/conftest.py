@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 
+import httpx
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -7,9 +8,21 @@ import pytest
 
 from kalshibot.config import data_dir
 from kalshibot.data import backfill as bf
+from kalshibot.kalshi import KalshiClient
 from kalshibot.research.load import Loader
 
 T = lambda s: pd.Timestamp(s, tz="UTC")  # noqa: E731
+
+
+@pytest.fixture
+def mock_client():
+    """Makes clients whose requests `handler` (an httpx request → response) answers."""
+    def make(handler, **kwargs) -> KalshiClient:
+        client = KalshiClient("https://x.test/trade-api/v2", min_interval=0, **kwargs)
+        client._http = httpx.Client(base_url="https://x.test/trade-api/v2",
+                                    transport=httpx.MockTransport(handler))
+        return client
+    return make
 
 
 def pytest_collection_modifyitems(config, items):

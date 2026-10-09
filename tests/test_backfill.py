@@ -6,7 +6,6 @@ import pyarrow.parquet as pq
 import pytest
 
 from kalshibot.data import backfill as bf
-from kalshibot.kalshi import KalshiClient
 
 MARKET = {  # shape of a real /historical/markets row (trimmed)
     "ticker": "KXBTCD-26AUG0819-T73799.99", "event_ticker": "KXBTCD-26AUG0819",
@@ -142,7 +141,7 @@ def test_a_failed_write_leaves_nothing_behind(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
-def test_client_retries_dropped_gets_but_never_other_methods():
+def test_client_retries_dropped_gets_but_never_other_methods(mock_client):
     attempts = []
 
     def handler(request):
@@ -151,9 +150,7 @@ def test_client_retries_dropped_gets_but_never_other_methods():
             raise httpx.ConnectError("dropped")
         return httpx.Response(200, json={"ok": True})
 
-    client = KalshiClient("https://x.test/trade-api/v2", min_interval=0)
-    client._http = httpx.Client(base_url="https://x.test/trade-api/v2",
-                                transport=httpx.MockTransport(handler))
+    client = mock_client(handler)
     assert client._request("GET", "/exchange/status") == {"ok": True}
     attempts.clear()
     with pytest.raises(httpx.ConnectError):
@@ -219,3 +216,24 @@ def test_candles_route_by_the_raw_tables_and_read_both_payload_shapes(tmp_path):
 def test_an_unknown_candle_shape_is_refused(tmp_path):
     with pytest.raises(ValueError, match="unrecognized candle"):
         bf._candle_row("X", {"end_period_ts": 60, "yes_bid": {"last": "0.5"}, "yes_ask": {}})
+
+
+def test_incentive_programs_page_by_next_cursor_once_each_without_combos(tmp_path, mock_client):
+    pages = {None: (["P1", "P2"], "c2"), "c2": (["P2", "P3"], None)}  # P2 on both pages
+    rewards = {"P1": 200000, "P2": 200000, "P3": 200000}
+
+    def handler(request):
+        ids, cursor = pages[request.url.params.get("cursor")]
+        return httpx.Response(200, json={"next_cursor": cursor, "incentive_programs": [
+            {"id": i, "market_ticker": "KXMVECROSS-X" if i == "P3" else "KXBTCD-X",
+             "start_date": "2026-10-09T07:15:00Z", "end_date": "2026-10-09T07:30:00Z",
+             "period_reward": rewards[i], "target_size_fp": "300.00", "paid_out": False}
+            for i in ids]})
+
+    table = pq.read_table(bf.backfill_incentive_programs(mock_client(handler), tmp_path))
+    assert table.column("id").to_pylist() == ["P1", "P2"]  # once each; combos dropped
+    assert table.column("target_size").to_pylist() == [30_000, 30_000]  # size units
+    pages[None], rewards["P2"] = (["P2"], "c2"), 100000  # P1 no longer served; P2 changed
+    table = pq.read_table(bf.backfill_incentive_programs(mock_client(handler), tmp_path))
+    assert dict(zip(table.column("id").to_pylist(), table.column("period_reward").to_pylist(),
+                    strict=True)) == {"P1": 200000, "P2": 100000}

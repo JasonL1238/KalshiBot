@@ -12,6 +12,7 @@ import typer
 
 from kalshibot.config import MARKET_DATA_URL, data_dir, load_data_key
 from kalshibot.data import backfill as bf
+from kalshibot.data.record import open_markets, record_snapshots
 from kalshibot.data.record import record as record_frames
 from kalshibot.kalshi import KalshiClient, KalshiSigner
 from kalshibot.kalshi.models import PRICE_SCALE
@@ -30,13 +31,13 @@ def markets(series: str = typer.Option("KXHIGHNY", help="Series ticker, e.g. KXH
         typer.echo(f"{info['title']}  [{series}]  settles via: "
                    + ", ".join(s["name"] for s in info.get("settlement_sources", [])))
         typer.echo(f"{'ticker':<28} {'contract':<16} {'bid':>6} {'ask':>6} {'spread':>6}")
-        open_markets = list(client.iter_markets(series_ticker=series, status="open"))
-        books = client.get_orderbooks([m["ticker"] for m in open_markets])
+        listed = open_markets(client, [series])
+        books = client.get_orderbooks([m["ticker"] for m in listed])
 
         def fmt(units: int | None) -> str:
             return "-" if units is None else f"{units / PRICE_SCALE:.4f}"
 
-        for m in open_markets:
+        for m in listed:
             book = books.get(m["ticker"])
             if book is None:
                 continue
@@ -52,11 +53,12 @@ app.add_typer(backfill_app, name="backfill")
 
 @backfill_app.command("reference")
 def backfill_reference():
-    """Series, fee changes, events, and every non-combo market (live + historical)."""
+    """Series, fee changes, events, every non-combo market (live + historical), and the
+    incentive programs."""
     out = bf.kalshi_dir(data_dir())
     with bf.public_clients(1)() as client:
         for step in (bf.backfill_series, bf.backfill_fee_changes, bf.backfill_markets,
-                     bf.backfill_events):
+                     bf.backfill_events, bf.backfill_incentive_programs):
             typer.echo(f"{step.__name__} -> {step(client, out)}")
 
 
@@ -133,23 +135,30 @@ def research_report(family: Family):
 def record(
     channels: str = typer.Option("orderbook_delta,trade", help="Comma-separated WS channels"),
     series: Annotated[list[str] | None, typer.Option(
-        help="Only these series (default: all open markets)")] = None,
+        help="Only these series (default: all open markets; required with --rest)")] = None,
+    rest: bool = typer.Option(False, help="Keyless REST book snapshots instead (needs --series)"),
+    every: float = typer.Option(10, min=1, help="With --rest: seconds between snapshot rounds"),
 ):
-    """Record raw WebSocket frames for open non-combo markets (needs the read-only data key).
-    Runs until stopped; reconnects with backoff and logs gaps to raw/ws/coverage.jsonl."""
-    key = load_data_key()
+    """Record raw WebSocket frames for open non-combo markets (needs the read-only data key),
+    or, with --rest, keyless REST snapshots of their full books. Runs until stopped; logs
+    coverage to raw/ws (or raw/rest)/coverage.jsonl."""
+    if rest and not series:
+        raise typer.BadParameter("--rest needs --series: every open market is too many "
+                                 "requests per round")
 
     def universe() -> list[str]:
         with bf.public_clients(1)() as client:
-            return [m["ticker"] for s in (series or [None])
-                    for m in client.iter_markets(series_ticker=s, status="open",
-                                                 mve_filter="exclude")]
-
-    signer = KalshiSigner.from_pem(key.key_id, key.pem)
+            return [m["ticker"] for m in open_markets(client, series)]
 
     async def main() -> None:
-        task = asyncio.create_task(record_frames(signer, universe, data_dir() / "raw" / "ws",
-                                                 channels.split(",")))
+        if rest:
+            job = record_snapshots(bf.public_clients(1, max_retries=0), series,
+                                   data_dir() / "raw" / "rest", every)
+        else:
+            key = load_data_key()
+            job = record_frames(KalshiSigner.from_pem(key.key_id, key.pem), universe,
+                                data_dir() / "raw" / "ws", channels.split(","))
+        task = asyncio.create_task(job)
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):  # stop cleanly: flush, log
             loop.add_signal_handler(sig, task.cancel)

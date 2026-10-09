@@ -1,14 +1,19 @@
-"""WebSocket feed and recorder against a local mock of Kalshi's WS server."""
+"""WebSocket feed and the recorders: WebSocket frames against a local mock of Kalshi's WS
+server, REST snapshots against a mock transport."""
 
 import asyncio
 import json
 
+import httpx
 import pyarrow.parquet as pq
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ed25519
+from typer.testing import CliRunner
 from websockets.asyncio.server import serve
 
-from kalshibot.data.record import Recorder, record
+from kalshibot import cli
+from kalshibot.data import record as record_module
+from kalshibot.data.record import Recorder, record, record_snapshots
 from kalshibot.kalshi.auth import KalshiSigner
 from kalshibot.kalshi.ws import BookFeed, Connection, SequenceGap
 
@@ -67,6 +72,9 @@ def test_recorder_batches_and_writes_atomically(tmp_path):
     assert pq.read_table(path).to_pylist()[1] == {"recv_ns": 1_791_000_000_100_000_000,
                                                    "frame": "b"}
     assert rec.buffer == [] and not list(tmp_path.rglob("*.tmp"))
+    assert rec.add(1_791_000_000_200_000_000, "c") is None
+    rec.last_flush -= rec.flush_seconds  # a minute later, the batch is due with no new frame
+    assert rec.due() == [(1_791_000_000_200_000_000, "c")]
 
 
 class MockKalshi:
@@ -87,32 +95,51 @@ class MockKalshi:
                     await ws.send(json.dumps(m))
 
 
+async def drive(job, until, tmp_path):
+    """Run the recorder coroutine `job` until `until()` holds, then cancel it. Cancelling
+    drops every frame the recorder has not yet handled, so `until` must test the
+    recorder's side (its log, its frames), never the server's or the clock's, and must
+    imply everything the test then asserts."""
+    task = asyncio.create_task(job)
+    try:
+        async with asyncio.timeout(30):
+            while not until():
+                if task.done():
+                    task.result()  # a recorder only ends early by raising; surface it
+                await asyncio.sleep(0.02)
+    except TimeoutError:
+        pytest.fail(f"`until` never held; coverage log: {coverage(tmp_path)}")
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
 def run_recorder(tmp_path, server, tickers, until, refresh=60.0, flush_frames=100_000):
-    """Run `record` against `server` until `until()` holds, cancel it, and return the
-    coverage events. Cancelling drops every frame the recorder has not yet handled, so
-    `until` must test the recorder's side (its log, its frames), never the server's or
-    the clock's, and must imply everything the test then asserts."""
+    """Run `record` against `server` until `until()` holds (`drive`), and return the
+    coverage events."""
     async def main():
         async with serve(server, "127.0.0.1", 0) as srv:
             port = srv.sockets[0].getsockname()[1]
             signer = KalshiSigner("key-1", ed25519.Ed25519PrivateKey.generate())
-            task = asyncio.create_task(record(signer, tickers, tmp_path, ["orderbook_delta"],
-                                              url=f"ws://127.0.0.1:{port}", refresh=refresh,
-                                              flush_frames=flush_frames))
-            try:
-                async with asyncio.timeout(30):
-                    while not until():
-                        if task.done():
-                            task.result()  # record() only ends early by raising; surface it
-                        await asyncio.sleep(0.02)
-            except TimeoutError:
-                pytest.fail(f"`until` never held; coverage log: {coverage(tmp_path)}")
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
+            await drive(record(signer, tickers, tmp_path, ["orderbook_delta"],
+                               url=f"ws://127.0.0.1:{port}", refresh=refresh,
+                               flush_frames=flush_frames), until, tmp_path)
 
     asyncio.run(main())
     return coverage(tmp_path)
+
+
+@pytest.fixture
+def buffered(monkeypatch):
+    """Every frame a recorder has buffered, in order."""
+    original, frames_seen = Recorder.add, []
+
+    def spying_add(self, recv_ns, frame):
+        frames_seen.append(frame)
+        return original(self, recv_ns, frame)
+
+    monkeypatch.setattr(Recorder, "add", spying_add)
+    return frames_seen
 
 
 def coverage(tmp_path):
@@ -155,15 +182,8 @@ def test_markets_listed_while_connected_get_subscribed(tmp_path):
     assert server.subscribes == subscribed() == [["T"], ["NEW"]]
 
 
-def test_cancel_writes_buffered_frames_and_logs_stop(tmp_path, monkeypatch):
+def test_cancel_writes_buffered_frames_and_logs_stop(tmp_path, buffered):
     server = MockKalshi([snapshot(7, 1), delta(7, 2, "0.4100", "1.00")])
-    original, buffered = Recorder.add, []
-
-    def spying_add(self, recv_ns, frame):
-        buffered.append(frame)
-        return original(self, recv_ns, frame)
-
-    monkeypatch.setattr(Recorder, "add", spying_add)
     events = run_recorder(tmp_path, server, lambda: ["T"], lambda: len(buffered) >= 3)
     assert events[-1]["event"] == "stop"
     assert frames(tmp_path) == buffered  # ack + snapshot + delta, all buffered at cancel
@@ -171,8 +191,6 @@ def test_cancel_writes_buffered_frames_and_logs_stop(tmp_path, monkeypatch):
 
 def test_slow_disk_writes_do_not_stall_receive_timestamps(tmp_path, monkeypatch):
     import time as _time
-
-    from kalshibot.data import record as record_module
 
     original = record_module.Recorder.write
 
@@ -201,3 +219,111 @@ def test_slow_disk_writes_do_not_stall_receive_timestamps(tmp_path, monkeypatch)
               for r in pq.read_table(f).to_pylist()]
     gaps = [b - a for a, b in zip(stamps, stamps[1:], strict=False)]
     assert max(gaps) < 200_000_000  # < 0.2 s, though each write takes 0.4 s
+
+
+def test_requests_keep_each_event_together_where_it_fits():
+    markets = ([{"event_ticker": "E", "ticker": f"E{i}"} for i in range(150)]
+               + [{"event_ticker": "F", "ticker": f"F{i}"} for i in range(60)]
+               + [{"event_ticker": "G", "ticker": "G0"}])
+    sizes = [len(r) for r in record_module._requests(markets)]
+    assert sizes == [100, 51, 60]  # E splits, F gets its own request, G fills E's tail
+    assert record_module._requests(markets)[1][-1] == "G0"
+
+
+def test_rest_snapshots_skip_a_bad_request_and_end_the_round_on_a_rate_limit(
+        tmp_path, buffered, mock_client):
+    listings, asked = [], []
+    script = {1: 400, 3: 503}  # the nth books request fails so
+
+    def handler(request):
+        if request.url.path.endswith("/markets"):
+            listings.append(1)
+            if len(listings) == 2:  # the second listing fails: the first list stands
+                return httpx.Response(500)
+            return httpx.Response(200, json={"cursor": "", "markets": [
+                {"event_ticker": e, "ticker": f"{e}{i}"}
+                for e, n in (("A", 60), ("B", 60), ("C", 30)) for i in range(n)]})
+        tickers = request.url.params.get_list("tickers")
+        asked.append(tickers[0])
+        if len(asked) in script:
+            return httpx.Response(script[len(asked)])
+        return httpx.Response(200, json={"orderbooks": [{"ticker": t} for t in tickers]})
+
+    def snapshots():
+        return [json.loads(f) for f in buffered]
+
+    asyncio.run(drive(record_snapshots(lambda: mock_client(handler, max_retries=0), ["S"],
+                                       tmp_path, every=0.01),
+                      lambda: len(snapshots()) >= 3, tmp_path))
+    events = coverage(tmp_path)
+    assert events[0] == {"t": events[0]["t"], "event": "start", "series": ["S"], "every": 0.01}
+    assert events[-1]["event"] == "stop"
+    assert [e["markets"] for e in events if e["event"] == "listed"] == [150]
+    assert [(e["where"], e.get("first")) for e in events if e["event"] == "error"][:3] == [
+        ("books", "A0"), ("listing", None), ("books", "A0")]
+    # round 1 skips the bad request; round 2 (on round 1's list) stops at the 503
+    assert asked[:5] == ["A0", "B0", "A0", "A0", "B0"]
+    assert [len(f["tickers"]) for f in snapshots()[:3]] == [60, 90, 60]  # A and C together
+    assert frames(tmp_path) == buffered
+
+
+def test_a_failed_write_is_logged_and_recording_goes_on(tmp_path, monkeypatch):
+    original, calls = Recorder.write, []
+
+    def flaky_write(self, batch):
+        calls.append(len(batch))
+        if len(calls) == 1:
+            raise OSError("disk hiccup")
+        return original(self, batch)
+
+    monkeypatch.setattr(Recorder, "write", flaky_write)
+    server = MockKalshi([snapshot(7, 1)] + [delta(7, s, "0.4100", "1.00") for s in range(2, 6)])
+    events = run_recorder(tmp_path, server, lambda: ["T"], lambda: len(frames(tmp_path)) >= 3,
+                          flush_frames=1)
+    lost = [e for e in events if e["event"] == "error" and e["where"] == "write"]
+    assert len(lost) == 1 and lost[0]["frames"] == 1 and lost[0]["first_ns"] == lost[0]["last_ns"]
+    assert events[-1]["event"] == "stop"
+
+
+def test_a_write_that_cannot_even_be_logged_stops_the_recorder(tmp_path, monkeypatch):
+    def broken_write(self, batch):
+        raise OSError("disk gone")
+
+    def log_unless_write(self, event, **detail):
+        if detail.get("where") == "write":
+            raise OSError("disk gone")
+        original_log(self, event, **detail)
+
+    original_log = Recorder.log
+    monkeypatch.setattr(Recorder, "write", broken_write)
+    monkeypatch.setattr(Recorder, "log", log_unless_write)
+    server = MockKalshi([snapshot(7, 1), delta(7, 2, "0.4100", "1.00")])
+
+    async def main():
+        async with serve(server, "127.0.0.1", 0) as srv:
+            port = srv.sockets[0].getsockname()[1]
+            signer = KalshiSigner("key-1", ed25519.Ed25519PrivateKey.generate())
+            async with asyncio.timeout(30):
+                await record(signer, lambda: ["T"], tmp_path, ["orderbook_delta"],
+                             url=f"ws://127.0.0.1:{port}", flush_frames=1)
+
+    with pytest.raises(OSError, match="disk gone"):
+        asyncio.run(main())
+    assert coverage(tmp_path)[-1]["event"] == "stop"
+
+
+def test_rest_recording_runs_without_retries(monkeypatch):
+    seen = []
+
+    async def fake(make_client, series, out, every):
+        seen.append((make_client()._max_retries, series, every))
+
+    monkeypatch.setattr(cli, "record_snapshots", fake)
+    out = CliRunner().invoke(cli.app, ["record", "--rest", "--series", "S", "--every", "5"])
+    assert out.exit_code == 0 and seen == [(0, ["S"], 5.0)]
+
+
+def test_rest_recording_needs_series(monkeypatch):
+    monkeypatch.setattr(cli, "record_snapshots", lambda *a: pytest.fail("recorded"))
+    out = CliRunner().invoke(cli.app, ["record", "--rest"])
+    assert out.exit_code != 0 and "--series" in out.output

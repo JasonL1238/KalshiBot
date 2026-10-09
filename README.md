@@ -16,7 +16,7 @@ rules: [AGENTS.md](AGENTS.md).
 
 ```bash
 kalshibot markets --series KXHIGHNY      # live top of book for one series
-kalshibot backfill reference             # every series, event, and non-combo market -> Parquet
+kalshibot backfill reference             # series, events, non-combo markets, fees, incentive programs
 kalshibot backfill trades --start YYYY-MM-DD --end YYYY-MM-DD   # trade tape by UTC day
 kalshibot research discover H1           # a family's configurations on discovery, logged
 kalshibot research candles H1            # the quotes its confirmation test needs
@@ -25,8 +25,11 @@ kalshibot research report H1             # Tier 2 on that confirmation, again
 ```
 
 Market data uses Kalshi's public endpoints and needs no account. Recording live order
-books needs a read-only prod key in `.env` (see `.env.example`). Run the recorder in a
-terminal multiplexer so it outlives the window; a failure stays on screen:
+books needs a read-only prod key in `.env` (see `.env.example`); until then,
+`kalshibot record --rest --series KXBTCD --series KXBTC15M` snapshots full books keylessly
+(the crypto series H4 and H11 need; add others as families need them).
+Run the recorder on an always-on machine, in a terminal multiplexer so it outlives the
+window; a failure stays on screen:
 
 ```bash
 tmux new -d -s record "$PWD/.venv/bin/kalshibot record; echo exited \$?; read"

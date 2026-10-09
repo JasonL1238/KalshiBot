@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterator
+from itertools import batched
 from typing import Any
 from urllib.parse import urlparse
 
@@ -23,6 +24,7 @@ from kalshibot.kalshi.auth import KalshiSigner
 from kalshibot.kalshi.models import OrderBook
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+ORDERBOOKS_MAX = 100  # markets per GET /markets/orderbooks
 
 
 class KalshiClient:
@@ -97,14 +99,15 @@ class KalshiClient:
         return resp.json()
 
     def _paginate(
-        self, path: str, key: str, params: dict[str, Any], *, auth: bool = False, limit: int = 1000
+        self, path: str, key: str, params: dict[str, Any], *, auth: bool = False, limit: int = 1000,
+        next_key: str = "cursor",
     ) -> Iterator[dict[str, Any]]:
         cursor = None
         while True:
             page = self._request("GET", path, params={**params, "limit": limit, "cursor": cursor},
                                  auth=auth)
             yield from page.get(key) or []
-            cursor = page.get("cursor")
+            cursor = page.get(next_key)
             if not cursor:
                 return
 
@@ -162,15 +165,25 @@ class KalshiClient:
         payload = self._request("GET", f"/markets/{ticker}/orderbook", params={"depth": depth})
         return OrderBook.from_api(ticker, payload)
 
+    def get_orderbooks_payload(self, tickers: list[str]) -> dict[str, Any]:
+        """The raw response with full books for up to `ORDERBOOKS_MAX` markets, all from the
+        same instant."""
+        if len(tickers) > ORDERBOOKS_MAX:
+            raise ValueError(f"at most {ORDERBOOKS_MAX} tickers per request")
+        return self._request("GET", "/markets/orderbooks", params={"tickers": tickers})
+
     def get_orderbooks(self, tickers: list[str]) -> dict[str, OrderBook]:
-        """Full books for up to 100 markets in one request, all from the same instant."""
+        """Full books, parsed; one request (one instant) per `ORDERBOOKS_MAX` markets."""
         books: dict[str, OrderBook] = {}
-        for i in range(0, len(tickers), 100):
-            payload = self._request("GET", "/markets/orderbooks",
-                                    params={"tickers": tickers[i:i + 100]})
-            for entry in payload.get("orderbooks") or []:
+        for chunk in batched(tickers, ORDERBOOKS_MAX, strict=False):
+            for entry in self.get_orderbooks_payload(list(chunk)).get("orderbooks") or []:
                 books[entry["ticker"]] = OrderBook.from_api(entry["ticker"], entry)
         return books
+
+    def iter_incentive_programs(self) -> Iterator[dict[str, Any]]:
+        """Every incentive program Kalshi serves, each for one market and window."""
+        return self._paginate("/incentive_programs", "incentive_programs", {},
+                              next_key="next_cursor")
 
     def iter_trades(
         self, *, ticker: str | None = None, min_ts: int | None = None, max_ts: int | None = None

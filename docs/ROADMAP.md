@@ -52,10 +52,11 @@ exchange. Whether it makes money is a result to measure, not an assumption.
   - For the fast, maker and lag families ([STRATEGIES](STRATEGIES.md)), in order:
     - the discovery tape days their explorations used, then those explorations re-run
       as `research discover` configurations;
-    - keyless capture on an always-on host, until the keyed recorder runs: a
-      REST-snapshot mode of `kalshibot record` for the markets they trade (`GET /markets/orderbooks`, same coverage log), the
-      incentive programs daily, and logs of when external data arrives (ESPN plays, NWS
-      daily summaries and METARs, Coinbase and Kraken trades);
+    - keyless capture on an always-on host, until the keyed recorder runs: REST book
+      snapshots of the markets they trade (built: `kalshibot record --rest`), the
+      incentive programs (built: a `backfill reference` table), and logs of when external
+      data arrives (ESPN plays, NWS daily summaries and METARs, Coinbase and Kraken
+      trades);
     - Tier-1 maker fills per print, capped at the sweep, with the null priced at fill
       time;
     - external data keyed by when it became available;
@@ -119,10 +120,10 @@ The windows, their dates, and per-hypothesis confirmation starts are defined in
 ## You (the user)
 
 1. Create a **read-only** prod API key (scope `read`), put it in `.env`, and start the
-   recorder now (README) on an always-on host, not a laptop (where:
-   [EXECUTION](EXECUTION.md), Hosting). Every day without it is forward-window book data
-   lost, and the market-making families need weeks of it. Keep any key that can trade (demo) out
-   of `.env`.
+   recorder now (README; until the key exists, the keyless `record --rest`) on an
+   always-on host, not a laptop (where: [EXECUTION](EXECUTION.md), Hosting). Every day
+   without it is forward-window book data lost, and the market-making families need
+   weeks of it. Keep any key that can trade (demo) out of `.env`.
 2. Add `commit_attribution = ""` to `~/.codex/config.toml` so Codex adds no co-author line.
 3. When M4 asks, run the order round-trip benchmark on demo, and optionally from an AWS
    us-east-2 host.
