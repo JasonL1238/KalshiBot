@@ -105,8 +105,9 @@ def test_every_trade_has_a_market():
 
 def test_trades_sit_on_their_market_tick_grid():
     """`price_ranges` is a market's current grid, and a long-lived market can change grids
-    (KXGREENLAND-29 traded on $0.001 in Oct 2025), so a few trades may be off it, but only
-    a few, and never off the $0.001 grid: a units bug would put nearly all of them off."""
+    (KXGREENLAND-29 traded on $0.001 in Oct 2025, KXCITRINI-28JUL01 through March 2026, and
+    both are coarser now), so some trades may be off it, but under 0.1%, and never off the
+    $0.001 grid: a units bug would put nearly all of them off."""
     days = api_days()
     if not days or not (API / "markets.parquet").exists():
         pytest.skip("API trades or markets not downloaded yet")
@@ -115,7 +116,7 @@ def test_trades_sit_on_their_market_tick_grid():
         FROM read_parquet({api_files(days)}, hive_partitioning = false) t
         JOIN read_parquet('{API}/markets.parquet') m USING (ticker) GROUP BY ALL""").fetchall()
     off = [(p, n) for p, r, n in rows if not on_tick(p, json.loads(r))]
-    assert sum(n for _, n in off) <= 1e-4 * sum(n for *_, n in rows), off[:10]
+    assert sum(n for _, n in off) <= 1e-3 * sum(n for *_, n in rows), off[:10]
     assert all(p % 10 == 0 for p, _ in off), f"off even the $0.001 grid: {off[:10]}"
 
 
