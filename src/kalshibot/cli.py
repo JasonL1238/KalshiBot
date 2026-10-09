@@ -10,23 +10,22 @@ from typing import Annotated
 
 import typer
 
-from kalshibot.config import MARKET_DATA_URL, READ_BUDGET, data_dir, load_data_key
+from kalshibot.config import MARKET_DATA_URL, data_dir, load_data_key
 from kalshibot.data import backfill as bf
 from kalshibot.data.record import record as record_frames
 from kalshibot.kalshi import KalshiClient, KalshiSigner
 from kalshibot.kalshi.models import PRICE_SCALE
+from kalshibot.research import ledger, run
+from kalshibot.research.load import Loader
+from kalshibot.strategies import FAMILIES
 
 app = typer.Typer(no_args_is_help=True, help="Kalshi research & trading toolkit.")
-
-
-def public_client() -> KalshiClient:
-    return KalshiClient(MARKET_DATA_URL)
 
 
 @app.command()
 def markets(series: str = typer.Option("KXHIGHNY", help="Series ticker, e.g. KXHIGHNY")):
     """Show open markets in a series with their live top of book."""
-    with public_client() as client:
+    with bf.public_clients(1)() as client:
         info = client.get_series(series)
         typer.echo(f"{info['title']}  [{series}]  settles via: "
                    + ", ".join(s["name"] for s in info.get("settlement_sources", [])))
@@ -55,7 +54,7 @@ app.add_typer(backfill_app, name="backfill")
 def backfill_reference():
     """Series, fee changes, events, and every non-combo market (live + historical)."""
     out = bf.kalshi_dir(data_dir())
-    with KalshiClient(MARKET_DATA_URL, min_interval=1 / READ_BUDGET) as client:
+    with bf.public_clients(1)() as client:
         for step in (bf.backfill_series, bf.backfill_fee_changes, bf.backfill_markets,
                      bf.backfill_events):
             typer.echo(f"{step.__name__} -> {step(client, out)}")
@@ -70,10 +69,40 @@ def backfill_trades(
     """Every non-combo trade in [start, end), one Parquet file per finished UTC day.
     Resumable: days already on disk are skipped."""
     paths = bf.backfill_trades(
-        lambda: KalshiClient(MARKET_DATA_URL, min_interval=workers / READ_BUDGET),
+        bf.public_clients(workers),
         bf.kalshi_dir(data_dir()), date.fromisoformat(start), date.fromisoformat(end),
         workers=workers)
     typer.echo(f"wrote {len(paths)} day files")
+
+
+research_app = typer.Typer(no_args_is_help=True, help="Evaluate a hypothesis family, "
+                            "recorded in the trial ledger (docs/BACKTESTING.md, Pipeline).")
+app.add_typer(research_app, name="research")  # `confirm` comes with the power simulation
+Family = Annotated[str, typer.Argument(help=f"One of {', '.join(FAMILIES)}")]
+
+
+def _family(name: str):
+    if name not in FAMILIES:
+        raise typer.BadParameter(f"unknown family {name!r}; known: {', '.join(FAMILIES)}")
+    return FAMILIES[name], Loader(family=name)
+
+
+@research_app.command("discover")
+def research_discover(family: Family):
+    """Every configuration on discovery, each recorded in the trial ledger."""
+    returns = run.discover(*_family(family))
+    for trial in ledger.trials(family)[-returns.shape[1]:]:
+        typer.echo(f"{trial['trial']['name']}: {trial['summary']}")
+
+
+@research_app.command("candles")
+def research_candles(
+    family: Family,
+    workers: int = typer.Option(2, help="Markets fetched in parallel, sharing the read budget"),
+):
+    """The 1-minute candles the family's confirmation test prices its null from."""
+    strategy, loader = _family(family)
+    typer.echo(f"wrote {run.fetch_candles(strategy, loader, workers)} candle files")
 
 
 @app.command()
@@ -87,7 +116,7 @@ def record(
     key = load_data_key()
 
     def universe() -> list[str]:
-        with public_client() as client:
+        with bf.public_clients(1)() as client:
             return [m["ticker"] for s in (series or [None])
                     for m in client.iter_markets(series_ticker=s, status="open",
                                                  mve_filter="exclude")]

@@ -50,14 +50,14 @@ def test_taker_fills_at_the_first_same_side_print_after_latency(con):
 
 def test_maker_fills_only_when_trades_go_through_the_bid(con):
     name = intents(con, [(1, "T", "yes", S(0), 100, 4000),    # filled by the 3900 print
-                         (2, "T", "yes", S(0), 1000, 4000),   # partial: 150 + 200 available
+                         (2, "T", "yes", S(0), 1000, 4000),   # partial: 1.5 + 2 available
                          (3, "T", "yes", S(0), 100, 3700)])   # nothing trades below 3700
     out = maker_fills(con, name, "trades", horizon=timedelta(seconds=10),
                       latency=timedelta(seconds=1), queue_haircut=0.5,
                       participation=1.0).df().set_index("intent_id")
     assert list(out.reset_index().columns) == FILL_COLUMNS
     assert out.loc[1, "fill_time"] == S(2) and out.loc[1, "fill_count"] == 100
-    assert out.loc[2, "fill_count"] == 350 and out.loc[2, "fill_time"] == S(5)
+    assert out.loc[2, "fill_count"] == 300 and out.loc[2, "fill_time"] == S(5)  # whole
     assert out.loc[1, "fill_price"] == 4000 and 3 not in out.index
 
 
@@ -65,14 +65,18 @@ def test_maker_horizon_cuts_off_later_prints(con):
     name = intents(con, [(1, "T", "yes", S(0), 1000, 4000)])
     out = maker_fills(con, name, "trades", horizon=timedelta(seconds=2),
                       latency=timedelta(seconds=1), queue_haircut=0.5, participation=1.0).df()
-    assert out.fill_count.tolist() == [150]  # only the S(2) print is within 1–3 s
+    assert out.fill_count.tolist() == [100]  # only S(2)'s 1.5 is within 1–3 s; whole
 
 
 def test_participation_caps_each_print_and_defaults_to_a_tenth(con):
     name = intents(con, [(1, "T", "yes", S(0), 1000, None),
                          (2, "T", "no", S(1.5), 1000, 4000)])  # a resting NO bid at 40¢
-    taker = taker_fills(con, name, "trades").df().set_index("intent_id")
-    assert taker.loc[1, "fill_count"] == 20  # 10% of the 200 printed at S(3)
+    assert taker_fills(con, name, "trades").df().empty  # 10% of 2 contracts: none whole
+    con.register("big", pd.DataFrame([("T", S(3), 4400, 2500, "yes")],
+                                     columns=["ticker", "created_time", "yes_price", "count",
+                                              "taker_side"]))
+    taker = taker_fills(con, name, "big").df().set_index("intent_id")
+    assert taker.loc[1, "fill_count"] == 200  # 10% of 25 contracts, in whole contracts
     maker = maker_fills(con, name, "trades", horizon=timedelta(seconds=10)).df()
     # YES buyers paying 44¢ at S(3) sold NO at 56¢, not below 40¢: nothing goes through a
     # NO bid at 40¢ here
@@ -102,7 +106,7 @@ def test_a_sweep_shows_its_best_level(con):
                                                 "taker_side"]))
     name = intents(con, [(1, "T", "yes", S(0), 1000, None)])
     out = taker_fills(con, name, "sweep", participation=1.0).df()
-    assert out[["fill_price", "fill_count"]].values.tolist() == [[4400, 150]]
+    assert out[["fill_price", "fill_count"]].values.tolist() == [[4400, 100]]  # 1.5: 1
 
 
 PRINTS = st.lists(st.tuples(st.integers(0, 60), st.integers(1, 99), st.integers(1, 9),

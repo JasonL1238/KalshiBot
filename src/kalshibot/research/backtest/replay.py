@@ -122,7 +122,7 @@ def replay(intents: pd.DataFrame, trades: pd.DataFrame, markets: pd.DataFrame,
            series_of: Callable[[str], str], schedule: FeeSchedule, window_end: datetime,
            precision: int, *, latency: timedelta = timedelta(seconds=1)
            ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Fill taker `intents` (`fills.INTENT_COLUMNS`) on `trades` (ticker, created_time,
+    """Fill taker `intents` (`strategies.base.INTENT_COLUMNS`) on `trades` (ticker, created_time,
     yes_price, count, taker_side).
 
     Returns (fills as `fills.FILL_COLUMNS`, engine PnL): the second is NautilusTrader's own

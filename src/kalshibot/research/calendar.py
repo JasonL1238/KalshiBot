@@ -8,6 +8,7 @@ embargoes): docs/ROADMAP.md, Research calendar.
     confirmation  [max(B, S_h), LOCKBOX_START)   one primary test per hypothesis
     lockbox       [LOCKBOX_START, FORWARD_START) opened once for all survivors, logged
     forward       [FORWARD_START, ...)           paper and live-book tests
+    forward test  FORWARD_TESTS[h]               instead of confirmation, for h in FORWARD
 """
 
 from __future__ import annotations
@@ -22,23 +23,33 @@ FORWARD_START = datetime(2026, 10, 1, tzinfo=UTC)
 
 # S_h: 00:00 UTC the day after the latest data date of any study that informed hypothesis
 # h. Filled in at pre-registration (M3); a hypothesis absent here has S_h = B.
-STUDY_END: dict[str, datetime] = {}
+STUDY_END: dict[str, datetime] = {
+    "H1": datetime(2026, 3, 12, tzinfo=UTC),  # why H1 is confirmed forward (STRATEGIES H1)
+}
+
+
+# Hypotheses confirmed on a stretch of the forward window instead (rules: docs/ROADMAP.md,
+# Research calendar), and those stretches, each fixed at registration and starting after it.
+FORWARD = frozenset({"H1", "H5"})
+FORWARD_TESTS: dict[str, tuple[datetime, datetime]] = {
+    "H1": (datetime(2026, 10, 15, tzinfo=UTC), datetime(2027, 2, 15, tzinfo=UTC)),
+}
 
 
 def confirmation_start(hypothesis: str) -> datetime:
     return max(BECKER_END, STUDY_END.get(hypothesis, BECKER_END))
 
 
-def window(ts: datetime, hypothesis: str | None = None) -> str:
-    """Which window a decision time falls in (for a hypothesis, if given)."""
-    if ts.tzinfo is None:
-        raise ValueError("decision times must be timezone-aware UTC")
-    if ts < BECKER_END:
-        return "discovery"
-    if ts >= FORWARD_START:
-        return "forward"
-    if ts >= LOCKBOX_START:
-        return "lockbox"
-    if hypothesis is not None and ts < confirmation_start(hypothesis):
-        return "unused"
-    return "confirmation"
+def confirmation_window(hypothesis: str) -> tuple[datetime, datetime]:
+    """Where the hypothesis has its one confirmation test."""
+    if hypothesis in FORWARD:
+        if hypothesis not in FORWARD_TESTS:
+            raise ValueError(f"{hypothesis} is confirmed forward; register its window first")
+        start, end = FORWARD_TESTS[hypothesis]
+        if start < FORWARD_START:
+            raise ValueError(f"{hypothesis}'s forward test starts before the forward window")
+    else:
+        start, end = confirmation_start(hypothesis), LOCKBOX_START
+    if start >= end:
+        raise ValueError(f"{hypothesis} has no confirmation window left; confirm it forward")
+    return start, end

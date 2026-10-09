@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -24,9 +24,11 @@ def test_one_tape_in_fixed_point_units(loader):
     assert loader.trades(D(2025, 10, 1), D(2025, 10, 1)).df().empty  # an empty range
 
 
-def test_missing_api_days_raise(loader):
+def test_missing_and_unfinished_days_raise(loader):
     with pytest.raises(MissingData):
         loader.trades(D(2025, 10, 1), D(2025, 10, 13))
+    with pytest.raises(MissingData, match="finished"):  # never a quietly shorter tape
+        loader.trades(D(2026, 10, 1), datetime.now(UTC) + timedelta(days=1))
 
 
 def test_lockbox_is_closed_but_the_forward_window_is_not(loader):
@@ -39,6 +41,8 @@ def test_lockbox_is_closed_but_the_forward_window_is_not(loader):
     assert forward.loc["A", "result"] == "yes"
     with pytest.raises(ValueError):
         loader.markets(datetime(2026, 1, 1))  # naive times are ambiguous
+    with pytest.raises(LockboxError):
+        loader.candles(pd.DataFrame({"ticker": ["A"], "day": [T("2026-05-02")]}))
 
 
 def test_only_survivors_see_the_lockbox(loader, tmp_path):
@@ -56,12 +60,30 @@ def test_markets_are_point_in_time(loader):
     assert "C" not in before.index  # listed later
     assert "C" not in loader.markets(D(2025, 11, 15)).df().ticker.tolist()  # half-open
     assert before.result.isna().all() and before.volume.isna().all()
-    assert before.loc["A", "scheduled_close"] == T("2025-12-01")  # can't close early: listed
     assert before.loc["A", "series_ticker"] == "SA" and before.loc["B", "category"] == "Crypto"
     assert before.loc["A", "rules_primary"] == "If ..."
     after = loader.markets(D(2025, 12, 2)).df().set_index("ticker")
     assert after.loc["A", "result"] == "yes" and after.loc["B", "volume"] == 900
-    assert pd.isna(after.loc["B", "scheduled_close"])  # an early close is never "listed"
+
+
+WINDOW = [(D(2025, 10, 1), D(2025, 10, 11))]
+
+
+def test_the_fingerprint_follows_every_input(loader):
+    candles = pd.DataFrame({"ticker": ["A"], "day": [T("2025-10-10")]})
+    before = loader.fingerprint(WINDOW, candles)
+    assert before == loader.fingerprint(WINDOW, candles)
+    bf._write([], bf.candles_path(loader.kalshi_dir, "A", T("2025-10-10").date()),
+              bf.CANDLE_SCHEMA)
+    with_candle = loader.fingerprint(WINDOW, candles)
+    assert with_candle != before
+    assert loader.fingerprint(WINDOW) != with_candle  # not read
+    bf._write([], bf.trades_path(loader.kalshi_dir, T("2025-10-01").date()), bf.TRADE_SCHEMA)
+    trades = loader.fingerprint(WINDOW, candles)
+    assert trades != with_candle  # a trade day rewritten (here: emptied)
+    path = loader.kalshi_dir / "series.parquet"
+    path.write_bytes(path.read_bytes() + b" ")
+    assert loader.fingerprint(WINDOW, candles) != trades
 
 
 def test_fee_schedule_from_tables(loader):
@@ -70,14 +92,14 @@ def test_fee_schedule_from_tables(loader):
     assert schedule.terms("SA", D(2025, 12, 1)).taker == 0  # SA → multiplier 0 on Nov 1
 
 
-def test_windows():
-    assert calendar.window(datetime(2025, 11, 25, 23, tzinfo=UTC)) == "discovery"
-    assert calendar.window(calendar.BECKER_END) == "confirmation"
-    assert calendar.window(calendar.LOCKBOX_START) == "lockbox"
-    assert calendar.window(calendar.FORWARD_START) == "forward"
+def test_confirmation_windows():
+    assert calendar.confirmation_window("H9") == (calendar.BECKER_END, calendar.LOCKBOX_START)
+    assert calendar.confirmation_window("H1") == calendar.FORWARD_TESTS["H1"]
     calendar.STUDY_END["HX"] = D(2026, 1, 1)
     try:
-        assert calendar.window(D(2025, 12, 15), "HX") == "unused"
-        assert calendar.confirmation_start("HX") == D(2026, 1, 1)
+        assert calendar.confirmation_window("HX")[0] == D(2026, 1, 1)
+        calendar.STUDY_END["HX"] = calendar.LOCKBOX_START
+        with pytest.raises(ValueError, match="forward"):  # nothing left before the lockbox
+            calendar.confirmation_window("HX")
     finally:
         del calendar.STUDY_END["HX"]

@@ -114,8 +114,14 @@ def test_dependence_counts_repeats_within_a_cluster_as_correlated():
     one = surprises(150, 20, 0.0, RNG)
     twice = {k: np.concatenate([v, v]) for k, v in one.items()}
     assert null.dependence(**twice).rho == pytest.approx(null.dependence(**one).rho)
-    with pytest.raises(ValueError):  # a cluster settles on one day
-        null.dependence(**{**one, "cluster": np.zeros(3000, dtype=int)})
+
+
+def test_a_cluster_counts_on_the_day_its_last_position_settles():
+    # a ladder whose strikes settle on different days (a season's win totals)
+    one = {k: v[:3] for k, v in surprises(1, 3, 0.0, RNG).items() if k != "won"}
+    days = null._clusters(**{**one, "cluster": np.zeros(3, dtype=int),
+                             "day": np.array([3, 5, 4])})["day"]
+    assert days.tolist() == [5]
 
 
 def test_widening_grows_with_density_dependence_and_break_even_variance():
@@ -137,20 +143,51 @@ def test_widening_grows_with_density_dependence_and_break_even_variance():
     assert null.widening(null.Dependence(0.5, (0.3,)), **hedged) >= 1
 
 
+def quotes(**columns):
+    n = len(columns["ticker"])
+    return pd.DataFrame({"mutually_exclusive": False, "position": 0.0, "ladder": None,
+                         "below": False, **columns}, range(n))
+
+
 def test_inputs_devig_only_exclusive_events_within_each_snapshot():
-    quotes = pd.DataFrame({
-        "event": ["L", "L", "L", "B", "S", "S", "M", "M"],
-        "mutually_exclusive": [True, True, True, False, False, False, False, False],
-        "decision_time": [0, 0, 0, 0, 0, 0, 0, 1],
-        "mid": [6000, 3000, 2000, 2500, 7000, 3000, 3000, 3500]})
-    out = null.inputs(quotes, "multiplicative")
-    ladder = out[out.event == "L"]
-    assert ladder["p_yes"].sum() == pytest.approx(1) and ladder["cluster"].nunique() == 1
-    assert ladder["hi"].iloc[-1] == 1
-    # a binary, strike contracts ("above X"), and one market quoted twice: nested [0, p)
+    out = null.inputs(quotes(
+        event=["L", "L", "L", "B", "S", "S", "M", "M"],
+        ticker=["L-1", "L-2", "L-3", "B-X", "S-1", "S-2", "M-X", "M-X"],
+        mutually_exclusive=[True, True, True, False, False, False, False, False],
+        position=[1.0, 2.0, 3.0, 0, 0, 0, 0, 0], ladder=[None] * 4 + [""] * 2 + [None] * 2,
+        below=[False] * 4 + [True] * 2 + [False] * 2, decision_time=[0, 0, 0, 0, 0, 0, 0, 1],
+        mid=[6000, 3000, 2000, 2500, 7000, 3000, 3000, 3500]), "multiplicative")
+    buckets = out[out.event == "L"]
+    assert buckets["p_yes"].sum() == pytest.approx(1) and buckets["cluster"].nunique() == 1
+    assert buckets["hi"].iloc[-1] == 1
+    # a binary, "below X" strikes, and one market quoted twice: nested [0, p)
     rest = out[out.event != "L"]
     assert (rest["lo"] == 0).all() and rest["hi"].tolist() == [0.25, 0.7, 0.3, 0.3, 0.35]
     assert out[out.event == "M"]["cluster"].nunique() == 1
+    assert out[out.event == "S"]["cluster"].nunique() == 1  # one ladder, one draw
+
+
+def test_a_bucket_keeps_its_interval_while_prices_hold():
+    # rows arrive in a different order at each snapshot; the layout must not follow them
+    out = null.inputs(quotes(
+        event="E", mutually_exclusive=True, ticker=["E-B9", "E-B10", "E-B11"] * 2,
+        position=[9.0, 10.0, 11.0] * 2, decision_time=[0, 0, 0, 1, 1, 1],
+        mid=[5000, 3000, 2000] * 2).iloc[[0, 1, 2, 5, 3, 4]], "multiplicative")
+    out = out.set_index(["decision_time", "ticker"])
+    assert out.loc[0, ["lo", "hi"]].equals(out.loc[1, ["lo", "hi"]].loc[["E-B9", "E-B10",
+                                                                         "E-B11"]])
+    assert out.loc[0, "lo"].tolist() == [0.0, 0.5, 0.8]  # by strike, not "B10" < "B9"
+
+
+def test_ladders_share_a_draw_from_their_end_and_others_get_their_own():
+    out = null.inputs(quotes(
+        event="A", ticker=["A-1", "A-2", "A-3", "A-X", "A-Y"],
+        ladder=["", "", "P", None, None], below=[False, True, False, False, False],
+        mid=[7000, 2000, 4000, 4000, 4000]), "multiplicative").set_index("ticker")
+    assert out.loc["A-1", ["lo", "hi"]].tolist() == pytest.approx([0.3, 1.0])  # above X
+    assert out.loc["A-2", ["lo", "hi"]].tolist() == pytest.approx([0.0, 0.2])  # below X
+    assert out.loc["A-1", "cluster"] == out.loc["A-2", "cluster"]
+    assert out["cluster"][["A-1", "A-3", "A-X", "A-Y"]].nunique() == 4
 
 
 def test_simulated_totals_match_one_big_draw():

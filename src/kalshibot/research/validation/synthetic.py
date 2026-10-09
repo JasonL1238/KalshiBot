@@ -2,7 +2,7 @@
 
 Each world is a set of events over a span of days. An event is a standalone binary, a
 ladder of mutually exclusive buckets, or (a `strike_share` of the ladders) a strike
-ladder of nested "above X" contracts, and every contract has a true probability q of
+ladder of nested contracts, and every contract has a true probability q of
 YES. Outcomes come from one uniform draw U per event, exactly as in the null model
 (`null.py`): a standalone or strike contract settles YES when U < q, a bucket when U
 falls in its interval. With `shock` = ρ > 0, U = Φ(√ρ·Z_day + √(1−ρ)·ε_event), so
@@ -83,8 +83,9 @@ def world(days: int, events_per_day: int, rng: np.random.Generator, quotes: str 
           edge: Edge = NO_EDGE, bucket_share: float = 0.5, half_spread_cents: float = 1.0,
           shock: float = 0.0, persistence: float = 0.0, strike_share: float = 0.0,
           side: str = "no", first_day: int = 0) -> pd.DataFrame:
-    """One row per contract: event, mutually_exclusive, day, q, yes, ask_yes / ask_no
-    (price units). Days are numbered from `first_day`."""
+    """One row per contract, in `null.inputs`' terms (event, ticker, mutually_exclusive,
+    position, ladder, below), plus day, q, yes, ask_yes / ask_no (price units). Days are
+    numbered from `first_day`."""
     n = days * events_per_day
     size = np.where(rng.random(n) < bucket_share, rng.integers(3, 8, n), 1)
     z = rng.standard_normal(days)
@@ -102,18 +103,22 @@ def world(days: int, events_per_day: int, rng: np.random.Generator, quotes: str 
             q = 0.8 * rng.dirichlet(np.full(k, 0.8), len(ids)) + 0.2 / k
             lo, hi = map(np.array, zip(*(bucket_intervals(row) for row in q), strict=True))
         exclusive = np.full(len(ids), k > 1)
-        if k > 1 and strike_share > 0:  # strike ladders: nested "above X" contracts
+        if k > 1 and strike_share > 0:  # strike ladders: nested contracts
             strike = rng.random(len(ids)) < strike_share
             q[strike] = -np.sort(-(0.03 + 0.94 * rng.random((strike.sum(), k))), axis=1)
             lo[strike], hi[strike] = 0.0, q[strike]
             exclusive &= ~strike
+        ladder = ~exclusive & (k > 1)
         parts.append(pd.DataFrame({
             "event_id": np.repeat(ids, k), "bucket": np.tile(np.arange(k), len(ids)),
-            "mutually_exclusive": np.repeat(exclusive, k), "q": q.ravel(),
-            "yes": ((lo <= u[ids, None]) & (u[ids, None] < hi)).ravel()}))
+            "mutually_exclusive": np.repeat(exclusive, k),
+            "ladder": np.where(np.repeat(ladder, k), "", None),
+            "q": q.ravel(), "yes": ((lo <= u[ids, None]) & (u[ids, None] < hi)).ravel()}))
     df = pd.concat(parts).sort_values(["event_id", "bucket"], ignore_index=True)
     df["day"] = first_day + df["event_id"] // events_per_day
     df["event"] = f"E{first_day}-" + df["event_id"].astype(str)
+    df["ticker"] = df["event"] + "-" + df["bucket"].astype(str)
+    df["position"], df["below"] = df["bucket"], True  # ladders settle YES when U < q: [0, q)
     q = df["q"].to_numpy()
     p_win = q if side == "yes" else 1 - q
     half = round(half_spread_cents * 100)
@@ -126,4 +131,5 @@ def world(days: int, events_per_day: int, rng: np.random.Generator, quotes: str 
     ask = np.clip(ask - edge.units(q), 1, PRICE_SCALE - 1)
     other = np.clip(PRICE_SCALE - ask + 2 * half, 1, PRICE_SCALE - 1)
     df["ask_yes"], df["ask_no"] = (ask, other) if side == "yes" else (other, ask)
-    return df[["event", "mutually_exclusive", "day", "q", "yes", "ask_yes", "ask_no"]]
+    return df[["event", "ticker", "mutually_exclusive", "position", "ladder", "below", "day",
+               "q", "yes", "ask_yes", "ask_no"]]

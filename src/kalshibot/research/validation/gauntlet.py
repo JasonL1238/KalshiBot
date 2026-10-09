@@ -5,7 +5,7 @@ method and the simulations behind it: docs/BACKTESTING.md).
 2. Confirmation tests it once against H0: net edge ≤ 0, with the widened market-
    calibrated null (`null.py`) and the stationary bootstrap of daily returns; the
    family's p-value is the larger of the two (`Verdict.p_value`).
-3. Holm across all pre-registered families (`decide`).
+3. Holm across the pre-registered families (`decide`).
 
 DSR, PBO, and the effective number of trials are diagnostics of the discovery
 selection, reported with every verdict.
@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from kalshibot.kalshi.models import PRICE_SCALE
+from kalshibot.research import calendar
 from kalshibot.research.validation import null, stats
 
 
@@ -30,6 +31,7 @@ class Gates:
     draws: int = 20_000  # null outcome draws and bootstrap resamples
     pbo_blocks: int = 10
     devig: str = "multiplicative"  # how `null.inputs` turns an event's mids into P(YES)
+    dependence_days: int = 400  # the dependence estimates use discovery's last decision days
 
 
 PREREGISTERED = Gates()
@@ -37,28 +39,46 @@ PREREGISTERED = Gates()
 
 @dataclass(frozen=True)
 class Positions:
-    """Binary contracts held to settlement (the null's scope). Money in micro-dollars."""
+    """Contracts held to settlement, or still open at the window's end and counted as
+    lost (the null's scope). Money in micro-dollars."""
 
     net_pnl: np.ndarray  # realized payoff − paid, per position
     paid: np.ndarray  # price × count + fee: the all-in cost
-    won: np.ndarray  # the contract held settled in the money
+    won: np.ndarray  # share of $1 per contract paid at settlement: 0 or 1 unless scalar
     buy_yes: np.ndarray  # True: holds YES
     count: np.ndarray  # size units
     p_yes: np.ndarray  # null P(YES) at decision time (`null.inputs`)
     lo: np.ndarray  # null outcome interval on the cluster's uniform draw
     hi: np.ndarray
-    cluster: np.ndarray  # integer cluster ids (one underlying at one settlement time)
-    day: np.ndarray  # settlement day of the cluster: integer UTC days, as settle.close_day
+    cluster: np.ndarray  # integer cluster ids (`null.inputs`)
+    day: np.ndarray  # settlement day: integer UTC days, as settle.close_day
+
+    @classmethod
+    def from_frame(cls, df: pd.DataFrame) -> Positions:
+        """From one row per position: pnl, paid, won, side ('yes' | 'no'), fill_count,
+        p_yes, lo, hi, cluster, day."""
+        return cls(net_pnl=df["pnl"].to_numpy(), paid=df["paid"].to_numpy(),
+                   won=df["won"].to_numpy(float), buy_yes=(df["side"] == "yes").to_numpy(),
+                   count=df["fill_count"].to_numpy(), p_yes=df["p_yes"].to_numpy(),
+                   lo=df["lo"].to_numpy(), hi=df["hi"].to_numpy(),
+                   cluster=df["cluster"].to_numpy(), day=df["day"].to_numpy())
 
     def check(self) -> None:
-        won = np.asarray(self.won)
-        if not (won.dtype == bool or np.isin(won, (0, 1)).all()):
-            raise ValueError("won must be 0/1: the null covers binary contracts only")
+        won = np.asarray(self.won, dtype=float)
+        if not ((0 <= won) & (won <= 1)).all():
+            raise ValueError("won is the share of $1 paid per contract, in [0, 1]")
         if not ((0 <= self.lo) & (self.lo < self.hi) & (self.hi <= 1)).all():
             raise ValueError("each outcome interval must be a non-empty part of [0, 1]")
         day = np.asarray(self.day)
         if day.dtype.kind not in "iu" or (len(day) and day.max() - day.min() > 40_000):
             raise ValueError("day must be an integer day number (UTC, as settle.close_day)")
+
+
+def pooled(positions: list[pd.DataFrame]) -> pd.DataFrame:
+    """Every configuration's positions for the dependence estimates, each bet once: one
+    per contract, side and decision time."""
+    return pd.concat(positions, ignore_index=True).drop_duplicates(
+        ["ticker", "side", "decision_time"])
 
 
 @dataclass(frozen=True)
@@ -93,7 +113,8 @@ def evaluate(discovery: pd.DataFrame, discovery_positions: Positions,
              confirmation_returns: pd.Series, positions: Positions, rng: np.random.Generator,
              gates: Gates = PREREGISTERED) -> Verdict:
     """`discovery`: days × configs daily returns (one zero-filled calendar).
-    `discovery_positions`: every configuration's, all settled before confirmation, for the
+    `discovery_positions`: every configuration's decided in discovery's last
+    `gates.dependence_days` (`pooled`), all settled before confirmation, for the
     dependence estimates. `confirmation_returns` and `positions` belong to
     `select(discovery)` on confirmation."""
     d, p = discovery_positions, positions
@@ -123,10 +144,17 @@ def evaluate(discovery: pd.DataFrame, discovery_positions: Positions,
 
 
 def decide(p_values: Mapping[str, float], gates: Gates = PREREGISTERED) -> dict[str, bool]:
-    """Which families pass: Holm across all `gates.families` pre-registered families."""
-    if len(p_values) > gates.families:
-        raise ValueError(f"{len(p_values)} families, but {gates.families} were pre-registered")
-    names = list(p_values)
-    padded = [p_values[n] for n in names] + [1.0] * (gates.families - len(names))
-    adjusted = stats.holm(np.array(padded))
-    return {n: bool(a <= gates.alpha) for n, a in zip(names, adjusted, strict=False)}
+    """Which families pass, with family-wise error ≤ `gates.alpha` over all
+    `gates.families` (m) pre-registered families. A family confirmed forward
+    (`calendar.FORWARD`, f of them) is decided alone at α/m once its window has settled;
+    the others by Holm over the remaining m − f places at α(m − f)/m, a family not run
+    counting as p = 1. The union bound adds the two, so neither waits for the other."""
+    m, forward = gates.families, calendar.FORWARD
+    rest = [n for n in p_values if n not in forward]
+    places = m - len(forward)
+    if len(rest) > places:
+        raise ValueError(f"{len(rest)} in-calendar families, but only {places} places")
+    out = {n: bool(p <= gates.alpha / m) for n, p in p_values.items() if n in forward}
+    adjusted = stats.holm(np.array([p_values[n] for n in rest] + [1.0] * (places - len(rest))))
+    return out | {n: bool(a <= gates.alpha * places / m)
+                  for n, a in zip(rest, adjusted, strict=False)}

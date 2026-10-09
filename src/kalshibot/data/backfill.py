@@ -5,6 +5,9 @@
     markets.parquet       every market, live and historical archives, with rules text
     fee_changes.parquet   Kalshi's logged per-series fee changes
     trades/date=YYYY-MM-DD/part.parquet   the trade tape, one file per finished UTC day
+    candles/date=YYYY-MM-DD/<ticker>.parquet   1-minute candles (YES bid, YES ask and
+                          trade price OHLC, volume, open interest), fetched only for
+                          the markets and days a research family needs
 
 Prices and sizes are the fixed-point units of kalshi.models; times are UTC. Combo
 (multivariate) rows are dropped from every table (`is_combo`). Each row records when it
@@ -24,10 +27,12 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+import httpx
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from kalshibot.config import MARKET_DATA_URL, READ_BUDGET
 from kalshibot.kalshi import KalshiClient
 from kalshibot.kalshi.models import optional_units, price_units, size_units
 
@@ -43,6 +48,12 @@ def is_combo(ticker: str) -> bool:
 
 def kalshi_dir(data_dir: Path) -> Path:
     return data_dir / "raw" / "kalshi"
+
+
+def public_clients(workers: int) -> Callable[[], KalshiClient]:
+    """Clients for `workers` parallel fetchers that together stay within the API's read
+    budget."""
+    return lambda: KalshiClient(MARKET_DATA_URL, min_interval=workers / READ_BUDGET)
 
 
 def _write(rows: Iterable[dict[str, Any]], path: Path, schema: pa.Schema) -> Path:
@@ -266,3 +277,95 @@ def backfill_trades(make_client: Callable[[], KalshiClient], out: Path, start: d
 
     with ThreadPoolExecutor(workers) as pool:
         return list(pool.map(run, todo))
+
+
+OHLC = ("open", "high", "low", "close")
+CANDLE_SCHEMA = pa.schema([
+    ("ticker", pa.string()), ("end_period_ts", UTC_TS),
+    *((f"{side}_{k}", pa.int64()) for side in ("yes_bid", "yes_ask") for k in OHLC),
+    *((f"price_{k}", pa.int64()) for k in (*OHLC, "mean", "previous")),
+    ("volume", pa.int64()), ("open_interest", pa.int64()),
+])
+
+
+def candles_path(out: Path, ticker: str, day: date) -> Path:
+    return out / "candles" / f"date={day.isoformat()}" / f"{ticker}.parquet"
+
+
+def _field(group: dict[str, Any], key: str) -> Any:
+    """The archive names a candle field `key`; the live endpoint `key_dollars` or `key_fp`."""
+    return next((group[k] for k in (key, f"{key}_dollars", f"{key}_fp") if k in group), None)
+
+
+def _candle_row(ticker: str, candle: dict[str, Any]) -> dict[str, Any]:
+    row = {"ticker": ticker,
+           "end_period_ts": datetime.fromtimestamp(candle["end_period_ts"], UTC),
+           "volume": optional_units(size_units, _field(candle, "volume")),
+           "open_interest": optional_units(size_units, _field(candle, "open_interest"))}
+    for side in ("yes_bid", "yes_ask"):
+        quote = candle.get(side)
+        if not isinstance(quote, dict) or not {"close", "close_dollars"} & quote.keys():
+            raise ValueError(f"unrecognized candle for {ticker}: {side} = {quote!r}")
+        row |= {f"{side}_{k}": optional_units(price_units, _field(quote, k)) for k in OHLC}
+    price = candle.get("price") or {}
+    return row | {f"price_{k}": optional_units(price_units, _field(price, k))
+                  for k in (*OHLC, "mean", "previous")}
+
+
+def backfill_candles_day(client: KalshiClient, out: Path, ticker: str, day: date,
+                         series_ticker: str | None, archived: bool) -> Path:
+    """One finished UTC day of 1-minute candles for one market: every minute ending in
+    (day, day + 1] that had a change, with the OHLC of its YES bid, YES ask and trade
+    price, volume and open interest. Markets settled before the API's market cutoff
+    (`archived`) are served by the historical archive, the rest by the live endpoint; a
+    404 from one tries the other, since the cutoff moves."""
+    start = datetime(day.year, day.month, day.day, tzinfo=UTC)
+    if start + timedelta(days=1) > _now():
+        raise ValueError(f"{day} hasn't finished yet")
+    first = int(start.timestamp())
+
+    def fetch(archive: bool) -> list[dict[str, Any]]:
+        return client.get_candlesticks(ticker, start_ts=first, end_ts=first + 86_400,
+                                       period_interval=1,
+                                       series_ticker=None if archive else series_ticker)
+
+    try:
+        candles = fetch(archived)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code != 404 or (archived and series_ticker is None):
+            raise
+        candles = fetch(not archived)
+    return _write((_candle_row(ticker, c) for c in candles
+                   if first < c["end_period_ts"] <= first + 86_400),
+                  candles_path(out, ticker, day), CANDLE_SCHEMA)
+
+
+def backfill_candles(make_client: Callable[[], KalshiClient], out: Path, needs: pd.DataFrame,
+                     workers: int = 2) -> list[Path]:
+    """Candles for every (ticker, day) row of `needs`, split across `workers`, each with
+    one client so its throttle holds. Series and settlement come from the raw markets
+    and events tables in `out`. Files already on disk are skipped, so an interrupted run
+    resumes."""
+    todo = sorted({(t, pd.Timestamp(d).date()) for t, d in needs[["ticker", "day"]].itertuples(
+        index=False) if not candles_path(out, t, pd.Timestamp(d).date()).exists()})
+    if not todo:
+        return []
+    con = duckdb.connect()
+    con.register("wanted", pd.DataFrame({"ticker": sorted({t for t, _ in todo})}))
+    known = con.sql("SELECT m.ticker, e.series_ticker, m.settlement_ts "
+                    "FROM read_parquet($m) m LEFT JOIN read_parquet($e) e USING (event_ticker) "
+                    "SEMI JOIN wanted USING (ticker)",
+                    params={"m": str(out / "markets.parquet"),
+                            "e": str(out / "events.parquet")}).df().set_index("ticker")
+    with make_client() as client:
+        cut = pd.Timestamp(client.historical_cutoff()["market_settled_ts"])
+
+    def run(chunk: list[tuple[str, date]]) -> list[Path]:
+        with make_client() as client:
+            return [backfill_candles_day(
+                client, out, ticker, day, known["series_ticker"].get(ticker),
+                bool(known["settlement_ts"].get(ticker, pd.NaT) < cut)) for ticker, day in chunk]
+
+    with ThreadPoolExecutor(workers) as pool:
+        return [p for paths in pool.map(run, [todo[k::workers] for k in range(workers)])
+                for p in paths]

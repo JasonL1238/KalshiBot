@@ -1,21 +1,22 @@
 """The market-calibrated null: settle every position at random, as if prices were right.
 
 Under H0 the market's de-vigged probability at decision time is the true one (`inputs`).
-Outcomes are drawn jointly per *cluster* (one underlying at one settlement time: a
-city-day, a BTC hourly fix, an economic release). Each cluster gets one uniform draw U,
-and each contract owns an interval [lo, hi) of U's range, so:
+Outcomes are drawn jointly per *cluster* (one underlying: a city-day, a BTC hourly fix,
+an economic release). Each cluster gets one uniform draw U, and each contract owns an
+interval [lo, hi) of U's range, so:
 
-- a strike ladder ("above X" for many X) settles monotonically: intervals [0, q_X);
 - mutually exclusive buckets get exactly one winner: consecutive intervals summing to 1;
+- a strike ladder on one underlying ("above X" or "below X" for many X: BTC at 5 pm, one
+  player's points) settles monotonically: "below X" owns [0, q_X), "above X" [1 − q_X, 1);
 - every contract's marginal P(YES) equals its implied probability.
 
-Positions in the same standalone or strike market taken at different times get nested
-intervals [0, q), so their outcomes are comonotone. A bucket's interval moves with the
-whole event's prices, so two positions in one bucket overlap only as their intervals
-do; the covariance is exact for the intervals given. The statistic is recentered so
-each config sits exactly at E[net PnL] = 0 (`recentered_pnl`), which tests H0: net
-edge ≤ 0 rather than "the market is right". Only binary contracts held to settlement
-fit.
+Positions in the same ladder or standalone market taken at different times get nested
+intervals, so their outcomes are comonotone. A bucket's interval moves with the whole
+event's prices (buckets are laid out in strike order at every snapshot), so two
+positions in one bucket overlap only as their intervals do; the covariance is exact for
+the intervals given. The statistic is recentered so each config sits exactly at
+E[net PnL] = 0 (`recentered_pnl`), which tests H0: net edge ≤ 0 rather than "the market
+is right". Only contracts held to settlement fit.
 
 Three things widen it (`widening`), none using confirmation outcomes:
 - at that boundary a position wins with its all-in break-even probability, not the
@@ -54,23 +55,40 @@ class Dependence:
 
 
 def inputs(quotes: pd.DataFrame, method: str) -> pd.DataFrame:
-    """Null P(YES) and outcome interval per quote. `quotes` has one row per contract
-    quote: event, mutually_exclusive (the event's markets are exclusive buckets), mid (the
-    YES mid in price units), and optionally decision_time (several snapshots of one
-    event; default one). Exclusive events are de-vigged by `method` within each snapshot
-    into consecutive intervals; other contracts get [0, p). P is clipped to [0.5%, 99.5%]
-    so no interval is empty. Adds p_yes, lo, hi, and an integer cluster per event
-    (numbered within the call, so pass every snapshot of a sample at once)."""
+    """Null P(YES), outcome interval and cluster per quote. `quotes` has one row per
+    contract quote: event, ticker (the contract), mutually_exclusive (the event's markets
+    are exclusive buckets), position (a bucket's place in its event: the strike), ladder
+    (the strike ladder within its event the contract belongs to, NaN if none), below
+    (a ladder contract is "below X"), mid (the YES mid in price units), and optionally
+    decision_time (several snapshots of one event; default one). P is the mid clipped to
+    [0.5%, 99.5%], so no interval is empty, except that an exclusive event's markets (two
+    or more quoted at one snapshot) are de-vigged together by `method`. Then:
+
+    - an exclusive event's markets get consecutive intervals, by position, on the
+      event's draw;
+    - a ladder's contracts share a draw, "below X" on [0, p) and "above X" on [1 − p, 1);
+    - any other contract gets [0, p) on a draw of its own.
+
+    Adds p_yes, lo, hi, and an integer cluster per draw (numbered within the call, so
+    pass every snapshot of a sample at once)."""
     df = quotes.copy()
     df["p_yes"] = (df["mid"] / PRICE_SCALE).clip(0.005, 0.995)
     df["lo"], df["hi"] = 0.0, df["p_yes"]
     snapshot = ["event", "decision_time"] if "decision_time" in df else ["event"]
-    buckets = df[df["mutually_exclusive"].astype(bool) & df.duplicated(snapshot, keep=False)]
+    exclusive = df["mutually_exclusive"].astype(bool)
+    buckets = df[exclusive & df.duplicated(snapshot, keep=False)].sort_values(
+        ["position", "ticker"])
     for _, event in buckets.groupby(snapshot, sort=False):
         q = devig((event["p_yes"] * PRICE_SCALE).to_numpy(), method)
         lo, hi = bucket_intervals(q)
         df.loc[event.index, ["p_yes", "lo", "hi"]] = np.column_stack([q, lo, hi])
-    df["cluster"] = pd.factorize(df["event"])[0]
+    ladder = df["ladder"].notna() & ~exclusive
+    above = ladder & ~df["below"].fillna(False).astype(bool)
+    df.loc[above, "lo"] = 1 - df.loc[above, "p_yes"]
+    df.loc[above, "hi"] = 1.0
+    draw = np.where(exclusive, "", np.where(ladder, "ladder " + df["ladder"].fillna(""),
+                                            df["ticker"]))
+    df["cluster"] = df.groupby([df["event"], draw], sort=False).ngroup()
     return df
 
 
@@ -140,25 +158,25 @@ def p_value(observed_net: float, null_net: np.ndarray) -> float:
 
 
 def _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even) -> pd.DataFrame:
-    """Per cluster: its day, the null variance of its summed won × count (exact, from the
-    shared uniform draw), that variance at the break-even boundary (scaled by the
-    positions' larger variances), and its direction: +1 if net long YES, else −1."""
+    """Per cluster: its day (when its last position settles), the null variance of its
+    summed won × count (exact, from the shared uniform draw), that variance at the
+    break-even boundary (scaled by the positions' larger variances), and its direction:
+    +1 if net long YES, else −1."""
     sign = np.where(buy_yes, 1.0, -1.0) * count  # won × count = constant + sign × YES
     win = np.where(buy_yes, p_yes, 1 - p_yes)
     df = pd.DataFrame({"cluster": cluster, "day": day, "lo": lo, "hi": hi, "sign": sign,
                        "own": win * (1 - win) * count**2,
                        "boundary": np.maximum(win * (1 - win),
                                               break_even * (1 - break_even)) * count**2})
-    if (df.groupby("cluster")["day"].nunique() > 1).any():
-        raise ValueError("a cluster settles at one time, so on one day")
     p = df["hi"] - df["lo"]
     df["var"] = df["sign"] ** 2 * p * (1 - p)  # singleton clusters; shared ones below
     for _, g in df[df.duplicated("cluster", keep=False)].groupby("cluster"):
         a, b, w = g["lo"].to_numpy(), g["hi"].to_numpy(), g["sign"].to_numpy()
         overlap = np.clip(np.minimum.outer(b, b) - np.maximum.outer(a, a), 0, None)
         df.loc[g.index, "var"] = 0.0
-        df.loc[g.index[0], "var"] = w @ (overlap - np.outer(b - a, b - a)) @ w
-    out = df.groupby("cluster").agg(day=("day", "first"), var=("var", "sum"),
+        with np.errstate(all="ignore"):  # macOS Accelerate raises spurious flags in matmul
+            df.loc[g.index[0], "var"] = w @ (overlap - np.outer(b - a, b - a)) @ w
+    out = df.groupby("cluster").agg(day=("day", "max"), var=("var", "sum"),
                                     own=("own", "sum"), boundary=("boundary", "sum"),
                                     sign=("sign", "sum"))
     ratio = (out["boundary"] / out["own"]).where(out["own"] > 0, 1.0)
@@ -194,9 +212,10 @@ def dependence(won: np.ndarray, buy_yes: np.ndarray, count: np.ndarray, p_yes: n
     positions less k times its variance (k = Σx / Σv removes any edge in proportion), is
     turned to the YES direction, y = d·x, with sd s = √v. Then
     ρ = Σ_{k≠l, same day} y_k y_l / Σ_{k≠l} s_k s_l, and for h = 1 … H (H = ⌈√D⌉ over the
-    D calendar days) c_h = Σ_d Y_d Y_{d+h} / Σ_d S_d S_{d+h}, with Y_d and S_d a day's
-    sums of y and s; all clipped to [−1, 1] (ρ to [0, 1]). Estimate on positions the test
-    doesn't score, over a long discovery, and broadly (every configuration's)."""
+    D days on which clusters settle) c_h = Σ_d Y_d Y_{d+h} / Σ_d S_d S_{d+h}, with Y_d and
+    S_d a day's sums of y and s (zero on days without clusters); all clipped to [−1, 1]
+    (ρ to [0, 1]). Estimate on positions the test doesn't score, over long stretches of
+    discovery, and broadly (every configuration's)."""
     clusters = _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even)
     surprise = (np.asarray(won, dtype=float) - np.where(buy_yes, p_yes, 1 - p_yes)) * count
     x = pd.Series(surprise).groupby(np.asarray(cluster)).sum().reindex(clusters.index)
@@ -211,7 +230,7 @@ def dependence(won: np.ndarray, buy_yes: np.ndarray, count: np.ndarray, p_yes: n
     same = (big_y**2 - (y**2).groupby(by_day).sum()).sum()
     rho = float(np.clip(same / pairs, 0, 1)) if pairs > 0 else 0.0
     ys, ss = _calendar(big_y), _calendar(big_s)
-    lags = min(int(np.ceil(np.sqrt(len(ys)))), len(ys) - 1)
+    lags = min(int(np.ceil(np.sqrt(len(big_y)))), len(ys) - 1)
     cross = tuple(float(np.clip(ys[:-h] @ ys[h:] / den, -1, 1)) if (den := ss[:-h] @ ss[h:])
                   > 0 else 0.0 for h in range(1, lags + 1))
     return Dependence(rho, cross)

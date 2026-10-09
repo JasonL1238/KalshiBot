@@ -1,6 +1,7 @@
 from datetime import UTC, date, datetime
 
 import httpx
+import pandas as pd
 import pyarrow.parquet as pq
 import pytest
 
@@ -158,3 +159,63 @@ def test_client_retries_dropped_gets_but_never_other_methods():
     with pytest.raises(httpx.ConnectError):
         client._request("POST", "/portfolio/events/orders", json={})
     assert attempts == ["POST"]
+
+
+def test_candles_route_by_the_raw_tables_and_read_both_payload_shapes(tmp_path):
+    calls = []
+    archive = {"end_period_ts": None, "volume": "321.67", "open_interest": "12034.40",
+               "price": {"open": "0.4900", "high": "0.5400", "low": "0.4800",
+                         "close": "0.5200", "mean": "0.5061", "previous": "0.5000"},
+               "yes_bid": {"open": "0.4900", "high": "0.5100", "low": "0.4800",
+                           "close": "0.5000"},
+               "yes_ask": {"open": "0.5000", "high": "0.5400", "low": "0.4900",
+                           "close": "0.5200"}}
+    live = {"end_period_ts": None, "volume_fp": "0.00", "open_interest_fp": "1599.17",
+            "price": {"previous_dollars": "0.0100"},
+            "yes_bid": {f"{k}_dollars": "0.0000" for k in bf.OHLC},
+            "yes_ask": {f"{k}_dollars": "0.0100" for k in bf.OHLC}}
+
+    class Candles:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def historical_cutoff(self):
+            return {"market_settled_ts": "2025-12-01T00:00:00Z"}
+
+        def get_candlesticks(self, ticker, start_ts, end_ts, period_interval, series_ticker):
+            calls.append((ticker, series_ticker, end_ts - start_ts, period_interval))
+            if ticker == "MOVED" and series_ticker:  # archived since the tables were read
+                raise httpx.HTTPStatusError("gone", request=httpx.Request("GET", "x"),
+                                            response=httpx.Response(404))
+            shape = live if series_ticker else archive
+            return [{**shape, "end_period_ts": ts} for ts in (start_ts, start_ts + 60)]
+
+    blank = {c: None for c in bf.MARKET_SCHEMA.names}
+    bf._write([{**blank, "ticker": t, "event_ticker": "E", "settlement_ts": s}
+               for t, s in (("OLD", datetime(2025, 11, 2, tzinfo=UTC)), ("NEW", None),
+                            ("MOVED", None))], tmp_path / "markets.parquet", bf.MARKET_SCHEMA)
+    bf._write([{"event_ticker": "E", "series_ticker": "S"}], tmp_path / "events.parquet",
+              bf.EVENT_SCHEMA)
+    needs = pd.DataFrame({"ticker": ["OLD", "NEW", "MOVED"], "day": [date(2025, 11, 1)] * 3})
+    bf.backfill_candles(Candles, tmp_path, needs, workers=2)
+    assert len(calls) == 4 and set(calls) == {
+        ("MOVED", "S", 86_400, 1), ("MOVED", None, 86_400, 1),  # live 404s: the archive
+        ("NEW", "S", 86_400, 1), ("OLD", None, 86_400, 1)}
+    read = {t: pq.read_table(bf.candles_path(tmp_path, t, date(2025, 11, 1))).to_pylist()
+            for t in ("OLD", "NEW")}
+    assert len(read["OLD"]) == 1  # a candle ending at the day's start belongs to the day before
+    old, new = read["OLD"][0], read["NEW"][0]
+    assert (old["yes_bid_low"], old["yes_ask_high"], old["price_mean"]) == (4800, 5400, 5061)
+    assert (old["volume"], old["open_interest"]) == (32167, 1203440)
+    assert (new["yes_bid_close"], new["yes_ask_close"], new["price_close"]) == (0, 100, None)
+    assert (new["price_previous"], new["open_interest"]) == (100, 159917)
+    bf.backfill_candles(Candles, tmp_path, needs, workers=1)  # resumes: nothing refetched
+    assert len(calls) == 4
+
+
+def test_an_unknown_candle_shape_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="unrecognized candle"):
+        bf._candle_row("X", {"end_period_ts": 60, "yes_bid": {"last": "0.5"}, "yes_ask": {}})

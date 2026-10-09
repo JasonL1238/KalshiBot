@@ -13,9 +13,12 @@ prints, conservatively:
   because queue position is unknown. Each through-print contributes
   `(1 − queue_haircut) × participation` of its size until the order is full or
   `horizon` expires.
+- Fills are whole contracts, rounded down: Kalshi traded whole contracts only until
+  March 2026, and fractions since only where a market enables them.
 
 Prices are kalshi.models units; a NO price is PRICE_SCALE − yes_price. Every tier (these
-rules and the Tier-2 engines) takes `INTENT_COLUMNS` and returns `FILL_COLUMNS`.
+rules and the Tier-2 engines) takes `strategies.base.INTENT_COLUMNS` and returns
+`FILL_COLUMNS`.
 """
 
 from __future__ import annotations
@@ -25,12 +28,14 @@ from datetime import timedelta
 import duckdb
 import pandas as pd
 
-from kalshibot.kalshi.models import PRICE_SCALE
+from kalshibot.kalshi.models import PRICE_SCALE, SIZE_SCALE
 
-# side: 'yes' | 'no', the contract bought; count in size units; limit in price units of
-# that contract (NULL: any price, takers only)
-INTENT_COLUMNS = ["intent_id", "ticker", "side", "decision_time", "count", "limit"]
 FILL_COLUMNS = ["intent_id", "ticker", "side", "fill_time", "fill_price", "fill_count", "maker"]
+
+
+def _whole(size: str) -> str:
+    """SQL rounding a size in size units down to whole contracts."""
+    return f"(floor(({size}) / {SIZE_SCALE}) * {SIZE_SCALE})::BIGINT"
 
 
 def no_fills() -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -55,13 +60,13 @@ def taker_fills(con: duckdb.DuckDBPyConnection, intents: str, trades: str,
                    QUALIFY row_number() OVER (PARTITION BY ticker, taker_side, created_time
                                               ORDER BY price) = 1)
         SELECT i.intent_id, i.ticker, i.side, t.created_time AS fill_time, t.price AS fill_price,
-               least(i.count, floor(t.print_count * {participation}))::BIGINT AS fill_count,
+               {_whole(f"least(i.count, t.print_count * {participation})")} AS fill_count,
                FALSE AS maker
         FROM i ASOF JOIN t
           ON i.ticker = t.ticker AND i.side = t.taker_side AND t.created_time > i.earliest
         WHERE t.created_time <= i.earliest + INTERVAL '{max_wait.total_seconds()} seconds'
           AND (i."limit" IS NULL OR t.price <= i."limit")
-          AND floor(t.print_count * {participation}) > 0""")
+          AND {_whole(f"least(i.count, t.print_count * {participation})")} > 0""")
 
 
 def maker_fills(con: duckdb.DuckDBPyConnection, intents: str, trades: str,
@@ -90,8 +95,8 @@ def maker_fills(con: duckdb.DuckDBPyConnection, intents: str, trades: str,
         SELECT intent_id, ticker, side,
                min(created_time) FILTER (WHERE filled >= count) AS done_time,
                max(created_time) AS last_time, any_value("limit") AS fill_price,
-               least(any_value(count), max(filled))::BIGINT AS fill_count, TRUE AS maker
+               {_whole("least(any_value(count), max(filled))")} AS fill_count, TRUE AS maker
         FROM cum GROUP BY intent_id, ticker, side
-        HAVING max(filled) > 0""").project(
+        HAVING {_whole("least(any_value(count), max(filled))")} > 0""").project(
         "intent_id, ticker, side, coalesce(done_time, last_time) AS fill_time, fill_price, "
         "fill_count, maker")

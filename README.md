@@ -18,6 +18,8 @@ rules: [AGENTS.md](AGENTS.md).
 kalshibot markets --series KXHIGHNY      # live top of book for one series
 kalshibot backfill reference             # every series, event, and non-combo market -> Parquet
 kalshibot backfill trades --start YYYY-MM-DD --end YYYY-MM-DD   # trade tape by UTC day
+kalshibot research discover H1           # a family's configurations on discovery, logged
+kalshibot research candles H1            # the quotes its confirmation test needs
 ```
 
 Market data uses Kalshi's public endpoints and needs no account. Recording live order

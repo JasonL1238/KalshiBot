@@ -9,15 +9,23 @@ except what M3 fixes per family before its own confirmation test (the last list 
 
 1. **Data.** Research reads only through `research/load.py`: one trade tape (Kalshi's
    API; [RESEARCH §1](RESEARCH.md) explains why not Becker's), markets as they were
-   listed at each instant, and a lockbox the loader refuses until the ledger records its
-   one unlock. Windows: `research/calendar.py`; rules:
+   listed at each instant, 1-minute candles (YES bid, YES ask and trade price) for the
+   markets a family's null prices, and a lockbox the loader refuses until the ledger
+   records its one unlock. Windows: `research/calendar.py`; rules:
    [ROADMAP](ROADMAP.md#research-calendar).
 2. **Intents.** A strategy turns point-in-time data into intents: buy this contract, at
-   this time, this many, up to this price (`fills.INTENT_COLUMNS`).
-3. **Tier 1, the verdicts.** `fills.py` fills intents conservatively from the tape, and
-   `settle.py` prices each fill with the costliest fee regime that could have applied,
-   pays settled markets their settlement value, and marks open positions at the
-   executable bid at window end (at zero until M3 fetches bids).
+   this time, this many, up to this price (`strategies.base.INTENT_COLUMNS`). Families
+   are evaluated only by `research/run.py`, which logs every trial in the ledger and
+   keeps a decision only if its position must settle inside its window (the calendar
+   rules).
+3. **Tier 1, the verdicts.** `fills.py` fills intents conservatively from the tape, in
+   whole contracts, and `settle.py` prices each fill with the costliest fee regime that
+   could have applied, pays settled markets their settlement value, and marks open
+   positions at the executable bid at window end (at zero until window-end bids are
+   fetched). Tests are net of the fee rate itself: rounding each fill up to a cent
+   depends on order size, which execution chooses, and would dwarf a small edge on the
+   one-contract fills a tape-based backtest gives. Every trial also records its PnL with
+   that rounding.
 4. **Tier 2, model uncertainty.** The same taker intents run through two open-source
    engines that fill them their own way (below). `settle.py` prices their fills too, so
    the gap to Tier 1 is the fill model alone, and each engine's own PnL must equal
@@ -31,40 +39,66 @@ except what M3 fixes per family before its own confirmation test (the last list 
      must both reject: the market-calibrated null (outcomes drawn from de-vigged prices,
      one draw per cluster, recentred to zero edge), widened to each position's
      break-even variance, to the same-day comovement of clusters, and to the persistence
-     of shocks across days, both measured on the family's discovery positions; and the
-     stationary bootstrap of daily returns;
-   - Holm across all 12 pre-registered families at family-wise α = 0.05 (a family not
-     run counts as p = 1);
-   - survivors are scored once more in the lockbox with the same test (Holm across
-     survivors), its unlock logged in the ledger before any result is seen.
+     of shocks across days, both measured on every configuration's discovery positions
+     (below); and the stationary bootstrap of daily returns;
+   - Holm across the 12 pre-registered families at family-wise α = 0.05 (a family not
+     run counts as p = 1), with the families confirmed forward split off at α/12 each
+     ([ROADMAP](ROADMAP.md#research-calendar));
+   - in-calendar survivors are scored once more in the lockbox with the same test (Holm
+     across them), its unlock logged in the ledger before any result is seen.
 
    DSR (on discovery, deflated for the trials), PBO, and the effective number of trials
    are reported as diagnostics. Why this test and not others: the conformance section.
-6. **Verdicts.** Validated (passes the lockbox), Promising (passes confirmation; the
-   lockbox or L2 data is pending), Rejected, or Inconclusive: the family's power at its
-   smallest economically meaningful edge, simulated on its own confirmation sample with
-   the same machinery, is below 0.8.
+6. **Verdicts.** Validated (passes the lockbox or a forward confirmation), Promising
+   (passes confirmation; the lockbox or L2 data is pending), Rejected, or Inconclusive:
+   the family's power at its smallest economically meaningful edge, simulated on its own
+   confirmation sample with the same machinery, is below 0.8.
 
-The null covers binary contracts held to settlement, which is why the tests count only
-positions settled inside their window (the calendar rules:
-[ROADMAP](ROADMAP.md#research-calendar)). Its prices are the mids de-vigged
-multiplicatively within each mutually exclusive event at each decision time, clipped
-to [0.5%, 99.5%] (`null.inputs`). Families whose positions exit early (market making,
-momentum) or settle on a scalar need a path null, specified and run through
-conformance before their confirmation test.
+The null covers contracts held to settlement (step 2 keeps only decisions whose
+positions must settle inside their window). A position still open at the window's end
+counts as lost in the null, which can only make the test stricter; a scalar settlement
+counts as the share of $1 it paid. Families whose positions exit early (market making,
+momentum) need a path null, specified and run through conformance before their
+confirmation test.
+
+- **Prices** (`research/quotes.py`): a market's mid at the decision is the midpoint of
+  the closing YES bid and ask of its last 1-minute candle ending by then, an empty side
+  at its bound (no bid: 0, no ask: $1), searched for up to 7 days back but not before
+  the market was listed. A mutually exclusive event is de-vigged multiplicatively over
+  every market listed and still open by then (a closed one shows an emptied book, and
+  it lost), so an event missing any member's quote leaves the null,
+  as does any other contract without its own; the ledger counts them. Probabilities
+  are clipped to [0.5%, 99.5%] (`null.inputs`).
+- **Draws** (`quotes.py` reads them off Kalshi's tickers and strikes; `null.inputs`):
+  an exclusive event's buckets share one draw, laid out in strike order at every
+  snapshot. So does a strike ladder on one underlying in any other event,
+  whatever Kalshi calls its strike type: markets whose ticker ends in a strike, grouped
+  by the ticker less that strike (BTC at one fix; one player's points; one team's
+  margin in a spread event), "below X" on [0, q) and "above X" on [1 − q, 1), so they
+  settle monotonically. Every other contract, such as two players' goal-scorer markets,
+  has its own draw, and the widening measures how draws move together. A cluster
+  counts on the day its last position settles.
+- **Dependence sample:** every configuration's discovery positions decided in its last
+  400 days (`Gates.dependence_days`), each bet once: contiguous, so clusters up to
+  ⌈√D⌉ days apart pair up often (D: the days on which they settle), and nearest the
+  confirmation window, since Kalshi's mix of markets keeps changing. Conformance's
+  discovery is 400 days, so there the sample is all of it; a 200-day sample proved too
+  noisy (the gauntlet's size at Holm's level reached 0.8% when shocks last for days and
+  confirmation is busier). Conformance includes a world whose dependence appears only
+  after the seam.
 
 Fixed per family at M3 pre-registration, before its confirmation test: the minimum
-economically meaningful edge and the power there; the maximum holding period (which
-sets both embargoes); the taker rule's candle leg (the
-worse of the next 1-minute candle's extreme and the next print; until candles are
-fetched, the print alone); the window-end bids that mark open positions (until then,
-zero); and, where needed, the path null.
+economically meaningful edge and the power there; whether it is confirmed forward; the
+maximum holding period (which sets both embargoes and which markets count); the taker
+rule's candle leg (the worse of the next 1-minute candle's extreme and the next print,
+or the print alone); the window-end bids that mark open positions (until they're wired
+in, zero); and, where needed, the path null.
 
 ## Fill models
 
 | | Taker fill | Size | Maker fill |
 |---|---|---|---|
-| Tier 1 (`fills.py`) | next print by a same-side taker after decision + latency and within `max_wait` (default 5 min); it shows the ask | ≤ 10% of that print (`participation`) | strict trade-through; (1 − haircut) × participation of each print through the bid |
+| Tier 1 (`fills.py`) | next print by a same-side taker after decision + latency and within `max_wait` (default 5 min); it shows the ask | ≤ 10% of that print (`participation`), in whole contracts | strict trade-through; (1 − haircut) × participation of each print through the bid, in whole contracts |
 | NautilusTrader (`replay.py`) | the market's last print when the order arrives, however old; a limit fills only within it, the rest canceled | that print's size, the rest one tick worse | not replayed |
 | vectorbt (`bars.py`) | last print at the end of the first 1-minute bar after decision + latency, however old | the whole order | not modeled |
 
@@ -120,6 +154,9 @@ the reference, and every engine's own PnL is reconciled against it.
 
 ## Conformance: how the confirmation test was chosen
 
+> Being re-measured for M3's dependence sample (discovery's last 400 days) and its new
+> world (a shock from the seam on); until then the tables below are M2's.
+
 `research/validation/conformance.py` runs the whole pipeline (selection, then the
 candidate tests) on synthetic worlds whose truth is known (`synthetic.py`). The family
 buys longshots as a taker paying 2026 fees: every contract whose YES ask is at most θ,
@@ -127,7 +164,7 @@ for 7 values of θ from 6¢ to 20¢, buying NO (the favorite–longshot trade) o
 mirror); a mixed family adds a configuration buying YES favorites (asks of 80¢ or more).
 A world has 20 events a day (or 100), half standalone binaries and half ladders of 3–7
 buckets; discovery is 400 days and confirmation the next 100 (the real calendar's ratio
-is about ten). The worlds:
+is about ten), and the dependence sample is the runner's (above). The worlds:
 
 - **market:** prices are right, so the family loses the spread and fee;
 - **boundary:** every bought ask is the highest price that still breaks even after the
@@ -136,9 +173,10 @@ is about ten). The worlds:
   dependence starkest), in some worlds lasting for days (AR(1) with persistence φ);
 - **YES and mixed families:** for a longshot buyer the mid understates the variance, and
   a shock moves YES and NO holders apart;
-- **strike ladders:** nested "above X" contracts settled by one draw;
+- **strike ladders:** nested strike contracts settled by one draw;
 - **seams:** an edge that exists only in discovery (the post-publication trap) or halves
-  at the seam; a confirmation twice as busy as discovery;
+  at the seam; a confirmation twice as busy as discovery; a shock that starts at the
+  seam, so discovery can't see the dependence;
 - **edges:** asks lowered by a few cents on contracts with true P(YES) below 15%.
 
 A procedure holds its size if, in every world without an edge, it finds one at most

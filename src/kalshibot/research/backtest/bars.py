@@ -37,7 +37,7 @@ def bars(intents: pd.DataFrame, trades: pd.DataFrame, markets: pd.DataFrame,
          series_of: Callable[[str], str], schedule: FeeSchedule, window_end: datetime,
          precision: int, *, latency: timedelta = timedelta(seconds=1)
          ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Fill taker `intents` (`fills.INTENT_COLUMNS`) at bar closes of `trades` (ticker,
+    """Fill taker `intents` (`strategies.base.INTENT_COLUMNS`) at bar closes of `trades` (ticker,
     created_time, yes_price, count, taker_side). Returns (fills, vectorbt's PnL in
     micro-dollars per market that settled before `window_end`)."""
     end = pd.Timestamp(window_end).tz_convert("UTC")

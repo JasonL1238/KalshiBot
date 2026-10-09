@@ -43,9 +43,14 @@ API keys, so use it for all execution testing.
   (≤ 100 at once, all from the same instant)
 - `GET /markets/trades` and `/historical/trades` take `min_ts` (inclusive) and `max_ts`
   (**exclusive**), in whole seconds.
-- Candlesticks (1, 60, or 1440 min; OHLC of `yes_bid`, `yes_ask`, and trade price):
-  `GET /series/{s}/markets/{t}/candlesticks` for live markets and
-  `/historical/markets/{t}/candlesticks` for archived ones.
+- Candlesticks (1, 60, or 1440 min; OHLC of `yes_bid`, `yes_ask`, and trade price, plus
+  volume and open interest): `GET /series/{s}/markets/{t}/candlesticks` for live markets
+  and `/historical/markets/{t}/candlesticks` for archived ones; the live endpoint 404s
+  once a market is archived. The archive names fields `close` and `volume`, the live
+  endpoint `close_dollars` and `volume_fp`. Only minutes with a change are returned,
+  `[start_ts, end_ts]` includes a candle ending exactly at `start_ts`, an empty side
+  reads 0 (bid) or 1.0000 (ask), and a closed market gets one more candle with its book
+  emptied.
 
 ### Historical data ✅
 - Each night at 00:00 UTC a cutoff advances by a day. Settled markets and trades older

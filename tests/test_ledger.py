@@ -17,10 +17,19 @@ def test_trials_are_appended_with_their_returns(env):
     a = ledger.record_trial("H1", {"threshold": 0.1}, "discovery", "abc", r, {"sharpe": 0.1})
     b = ledger.record_trial("H1", {"threshold": 0.2}, "discovery", "abc", r * 2, {"sharpe": 0.1})
     assert [t["trial_id"] for t in ledger.trials("H1")] == [a, b]
-    assert ledger.trial_returns("H1")[b].tolist() == [0.02, -0.04]
+    assert ledger.trial_returns("H1", [a, b])[b].tolist() == [0.02, -0.04]
     before = (env / "ledger" / "H1.jsonl").read_text()
     ledger.record_trial("H1", {"threshold": 0.3}, "discovery", "abc", r, {})
     assert (env / "ledger" / "H1.jsonl").read_text().startswith(before)  # append-only
+
+
+def test_a_family_starts_one_confirmation_test(env):
+    ledger.record_trial("H1", {"name": "a"}, "discovery", "abc", pd.Series(dtype=float), {})
+    ledger.begin_confirmation("H1", {"name": "a"}, "abc")
+    assert len(ledger.trials("H1")) == 1  # the start marker isn't a trial
+    assert '"kind": "start"' in (env / "ledger" / "H1.jsonl").read_text().splitlines()[-1]
+    with pytest.raises(RuntimeError, match="already had"):
+        ledger.begin_confirmation("H1", {"name": "a"}, "abc")
 
 
 def test_lockbox_opens_exactly_once_for_named_survivors(env):

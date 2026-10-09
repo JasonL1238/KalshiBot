@@ -3,11 +3,12 @@
 Research code reads market data only through `Loader`, so the calendar and the
 look-ahead rules are enforced in one place:
 
-- One trade tape, Kalshi's API, combos excluded (`data/backfill.py`). Becker's dataset
-  is only a cross-check: it lacks whole markets (docs/RESEARCH.md §1, Historical data).
-  Asking for days that aren't on disk raises `MissingData` instead of returning a
-  thinner tape.
-- No lockbox data: reading trades in [LOCKBOX_START, FORWARD_START) raises
+- One trade tape, Kalshi's API, combos excluded (`data/backfill.py`), and 1-minute
+  candles (`candles`) where a family fetched them. Becker's dataset is only a
+  cross-check: it lacks whole markets (docs/RESEARCH.md §1, Historical data). Asking
+  for trade days or candle files that aren't on disk, or for days that haven't finished,
+  raises `MissingData` instead of returning less.
+- No lockbox data: reading trades or candles in [LOCKBOX_START, FORWARD_START) raises
   `LockboxError`, and outcomes of markets that settled then stay hidden, until the
   ledger's one unlock names this loader's `family` as a survivor. The forward window is
   always open.
@@ -18,13 +19,16 @@ look-ahead rules are enforced in one place:
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import duckdb
+import numpy as np
+import pandas as pd
 
 from kalshibot.config import data_dir as default_data_dir
-from kalshibot.data.backfill import TRADE_SCHEMA, trades_path
+from kalshibot.data.backfill import CANDLE_SCHEMA, TRADE_SCHEMA, candles_path, trades_path
 from kalshibot.kalshi.fee_history import FeeSchedule
 from kalshibot.research.calendar import FORWARD_START, LOCKBOX_START
 from kalshibot.research.ledger import lockbox_survivors
@@ -39,6 +43,9 @@ POST_HOC = ["close_time", "expected_expiration_time", "expiration_time", "occurr
             "settlement_ts", "status", "result", "settlement_value", "expiration_value",
             "volume", "open_interest", "price_level_structure", "price_ranges", "updated_time"]
 META = ["source", "fetched_at"]
+# A market's series: its event's, or (some 13k markets have no event row) the event
+# ticker's prefix, which names the series for 98% of events
+SERIES = "coalesce(e.series_ticker, split_part(m.event_ticker, '-', 1))"
 
 
 class LockboxError(RuntimeError):
@@ -46,7 +53,7 @@ class LockboxError(RuntimeError):
 
 
 class MissingData(RuntimeError):
-    """The requested range needs API trade days that haven't been backfilled."""
+    """The request needs trade days or candle files that haven't been backfilled."""
 
 
 class Loader:
@@ -56,6 +63,17 @@ class Loader:
         self._kalshi = root / "raw" / "kalshi"
         self._con = duckdb.connect()
         self._con.execute("SET TimeZone = 'UTC'")  # date casts and display in UTC
+
+    @property
+    def kalshi_dir(self) -> Path:
+        """Where the raw Kalshi tables live (`data.backfill` writes them)."""
+        return self._kalshi
+
+    @property
+    def con(self) -> duckdb.DuckDBPyConnection:
+        """The connection every relation here lives on: register a frame on it to join
+        the frame with them."""
+        return self._con
 
     def _parquet(self, name: str) -> str:
         return str(self._kalshi / f"{name}.parquet")
@@ -70,6 +88,8 @@ class Loader:
         if start < FORWARD_START and end > LOCKBOX_START and not self._lockbox_open():
             raise LockboxError(f"[{start}, {end}) overlaps the lockbox [{LOCKBOX_START}, "
                                f"{FORWARD_START}), open only to logged survivors")
+        if end > datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0):
+            raise MissingData(f"[{start}, {end}) runs past the last finished UTC day")
         days = _days(start, end)
         missing = [d for d in days if not trades_path(self._kalshi, d).exists()]
         if missing:
@@ -83,27 +103,77 @@ class Loader:
             params={"api": [str(trades_path(self._kalshi, d)) for d in days],
                     "start": start, "end": end})
 
+    def _candle_paths(self, wanted: pd.DataFrame) -> list[Path]:
+        return [candles_path(self._kalshi, t, pd.Timestamp(d).date())
+                for t, d in wanted[["ticker", "day"]].itertuples(index=False)]
+
+    def has_candles(self, wanted: pd.DataFrame) -> np.ndarray:
+        """Which (ticker, day) rows of `wanted` have a candle file on disk."""
+        return np.array([p.exists() for p in self._candle_paths(wanted)], bool)
+
+    def candles(self, wanted: pd.DataFrame) -> duckdb.DuckDBPyRelation:
+        """1-minute candles (`data.backfill.CANDLE_SCHEMA`) for the (ticker, day) rows of
+        `wanted`, under the same lockbox and missing-data rules as `trades`."""
+        days = sorted({pd.Timestamp(d).date() for d in wanted["day"]})
+        if days and not self._lockbox_open() and any(
+                LOCKBOX_START.date() <= d < FORWARD_START.date() for d in days):
+            raise LockboxError("candles in the lockbox are open only to logged survivors")
+        paths = self._candle_paths(wanted[["ticker", "day"]].drop_duplicates())
+        missing = [p for p in paths if not p.exists()]
+        if missing:
+            raise MissingData(f"{len(missing)} candle files missing (first {missing[0]}); "
+                              "fetch them with research.run.fetch_candles")
+        if not paths:
+            return self._con.from_arrow(CANDLE_SCHEMA.empty_table())
+        return self._con.sql("SELECT * FROM read_parquet($p, hive_partitioning = false)",
+                             params={"p": [str(p) for p in paths]})
+
     def markets(self, as_of: datetime) -> duckdb.DuckDBPyRelation:
         """Markets listed by `as_of`, with their series and category; post-hoc columns are
-        NULL unless the market settled before `as_of`. `scheduled_close` is the listed
-        close for markets that can't close early, else NULL."""
+        NULL unless the market settled before `as_of`. Every market has a series
+        (`SERIES`)."""
         as_of = _utc(as_of)
         known = "m.settlement_ts < $as_of"
         if not self._lockbox_open():  # lockbox-era outcomes stay hidden
             known += " AND NOT (m.settlement_ts >= $lock_start AND m.settlement_ts < $lock_end)"
         cols = ([f"m.{c}" for c in AS_LISTED]
                 + [f"CASE WHEN {known} THEN m.{c} END AS {c}" for c in POST_HOC]
-                + ["CASE WHEN NOT m.can_close_early THEN m.close_time END AS scheduled_close",
-                   "e.series_ticker", "s.category", "e.mutually_exclusive"])
+                + [f"{SERIES} AS series_ticker", "s.category", "e.mutually_exclusive"])
         return self._con.sql(
             f"SELECT {', '.join(cols)} FROM read_parquet($markets) m "
             "LEFT JOIN read_parquet($events) e USING (event_ticker) "
-            "LEFT JOIN read_parquet($series) s ON s.series_ticker = e.series_ticker "
+            f"LEFT JOIN read_parquet($series) s ON s.series_ticker = {SERIES} "
             "WHERE m.created_time < $as_of",
             params={"as_of": as_of, "markets": self._parquet("markets"),
                     "events": self._parquet("events"), "series": self._parquet("series"),
                     **({} if self._lockbox_open() else
                        {"lock_start": LOCKBOX_START, "lock_end": FORWARD_START})})
+
+    def fetched(self) -> datetime | None:
+        """When the markets and events tables were fetched (their oldest row; None if
+        either is empty): outcomes after this aren't in them yet."""
+        return self._con.sql(
+            "SELECT least(min(m), min(e)) FROM (SELECT min(fetched_at) AS m FROM "
+            "read_parquet($m)), (SELECT min(fetched_at) AS e FROM read_parquet($e))",
+            params={"m": self._parquet("markets"), "e": self._parquet("events")}).fetchone()[0]
+
+    def fingerprint(self, windows: list[tuple[datetime, datetime]],
+                    candles: pd.DataFrame | None = None) -> str:
+        """A hash of the data an evaluation reads: the contents of the reference tables,
+        the name and size of every trade-day file of the `windows` ([start, end) each),
+        and of every file among the (ticker, day) rows of `candles` that exists."""
+        windows = [(_utc(start), _utc(end)) for start, end in windows]
+        digest = hashlib.sha256(repr(windows).encode())
+        for name in ("series", "events", "markets", "fee_changes"):
+            with open(self._parquet(name), "rb") as f:
+                digest.update(hashlib.file_digest(f, "sha256").digest())
+        wanted = (candles[["ticker", "day"]].drop_duplicates().sort_values(["ticker", "day"])
+                  if candles is not None else pd.DataFrame(columns=["ticker", "day"]))
+        for path in [trades_path(self._kalshi, d) for w in windows for d in _days(*w)] + \
+                self._candle_paths(wanted):
+            if path.exists():
+                digest.update(f"{path.relative_to(self._kalshi)}:{path.stat().st_size};".encode())
+        return digest.hexdigest()[:16]
 
     def fee_schedule(self) -> FeeSchedule:
         log = self._con.sql("SELECT series_ticker, scheduled_ts, fee_type, fee_multiplier "
@@ -120,6 +190,6 @@ def _utc(ts: datetime) -> datetime:
 
 
 def _days(start: datetime, end: datetime) -> list[date]:
-    """UTC days that [start, end) touches, up to yesterday (today isn't finished)."""
-    last = min((end - timedelta(microseconds=1)).date(), datetime.now(UTC).date() - timedelta(1))
+    """UTC days that [start, end) touches."""
+    last = (end - timedelta(microseconds=1)).date()
     return [start.date() + timedelta(n) for n in range((last - start.date()).days + 1)]

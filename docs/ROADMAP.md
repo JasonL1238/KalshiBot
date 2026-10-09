@@ -36,17 +36,18 @@ exchange. Whether it makes money is a result to measure, not an assumption.
   - Positive control: the favorite–longshot pattern on discovery data (criterion set;
     runs when the discovery-period API tape lands).
 - [ ] **M3. Strategy research.**
-  - Shared strategy types (`strategies/base.py`), with the first strategy.
+  - Shared strategy types (`strategies/base.py`).
   - The research runner: refuses to run without the ledger, logs every evaluation
     before showing it, and allows one confirmation test per family.
-  - Per-family candle fetching: the candle leg of the taker rule and window-end bids.
+  - Per-family candle fetching (`research/run.py`): the null's quotes, then the candle
+    leg of the taker rule and window-end bids.
   - A path null (block-resampled, sign-randomized increments within a cluster) for
     families that exit before settlement, measured in conformance first.
   - Pre-register H1–H12 (m = 12, category strata), each with its minimum economically
     meaningful edge and the power at that edge on its own confirmation sample.
   - Run every confirmation test.
-  - Apply Holm once.
-  - Open the lockbox once for all survivors.
+  - Apply Holm once to the in-calendar families (forward ones are decided alone).
+  - Open the lockbox once for all in-calendar survivors.
   - Write verdicts.
   - Loaders honor the recorder's coverage log when L2-based hypotheses need it.
 - [ ] **M4. Execution research.**
@@ -71,17 +72,24 @@ The windows, their dates, and per-hypothesis confirmation starts are defined in
 
 - **Window assignment.** A trade belongs to the window of its decision time. Trades are
   never filtered on actual settlement time.
-- **Tests count settled positions.** The confirmation and lockbox tests take binary
-  contracts held to settlement, so they count only markets whose *as-listed* scheduled
-  close is inside the window (early-close markets without one are excluded), and
-  decisions in a window's last maximum holding period are embargoed. PnL marked at the
-  executable bid at window end is reported alongside, for anything still open.
+- **Positions settle inside their window.** Nearly every Kalshi market can close early,
+  so its scheduled close says little. A decision counts only if its market's as-listed
+  latest expiration (`latest_expiration_time`, fixed at listing) is at most the family's
+  maximum holding period after it, and decisions in a window's last maximum holding
+  period are embargoed. Markets without one are excluded. A position whose settlement
+  still runs past the window's end is marked at the executable bid there (at zero until
+  window-end bids are fetched).
 - **No look-ahead across seams.** Anything fitted in a window sees only data visible
   before the window's end (the loader's `as_of`), so labels that settle later are
   invisible. Each window's first maximum holding period is also embargoed, so positions
   carried across a seam never enter its tests.
-- **H5 (weather).** Crosier's sample runs into 2026, so H5 is tested only in the forward
-  window, which is entirely on the post-2026-08-14 Weather Company settlement source.
+- **Forward confirmation.** A hypothesis whose studies leave it too little confirmation
+  window is confirmed on a stretch of the forward window fixed at its registration and
+  starting after it (`calendar.FORWARD_TESTS`; H1, and H5, whose study runs into 2026 and
+  whose forward window is entirely on the post-2026-08-14 Weather Company settlement
+  source). It never opens the lockbox. It is decided alone at α/12 once its window has
+  settled, while Holm runs over the other families' places at α·(12 − f)/12, so neither
+  waits for the other (`gauntlet.decide`).
 
 ## You (the user)
 

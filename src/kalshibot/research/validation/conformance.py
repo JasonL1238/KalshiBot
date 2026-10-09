@@ -17,7 +17,9 @@ decision procedures use, and `PROCEDURES` turns them into "edge found":
 - null + bootstrap; the null with DSR > 0.95 and PBO < 0.2 gates;
 - Romano–Wolf: every configuration tested on confirmation at once (no discovery
   selection), with jointly simulated null statistics;
-- widened null: the null widened for break-even variance and dependence;
+- widened null: the null widened for break-even variance and dependence, estimated as
+  the runner does: on every configuration's positions in discovery's last 400 days
+  (`Gates.dependence_days`; here all of it), each bet once (`gauntlet.pooled`);
 - gauntlet: what `gauntlet.evaluate` decides (`Verdict.p_value`).
 
 `rates` reports how often each procedure declares an edge: its size (false positive
@@ -57,28 +59,23 @@ def _configs(side: str, favorites: bool) -> list[tuple[str, str, int]]:
 
 
 def _positions(df: pd.DataFrame, config: tuple[str, str, int]) -> pd.DataFrame:
+    """One contract bought per quote the configuration takes, in the columns
+    `settle.daily_returns` and `gauntlet.Positions.from_frame` read."""
     _, side, cut = config
     pos = df[df["ask_yes"] <= cut if cut > 0 else df["ask_yes"] >= -cut].copy()
-    pos["side"] = side
+    pos["side"], pos["fill_count"] = side, SIZE_SCALE
     pos["won"] = pos["yes"] if side == "yes" else ~pos["yes"]
-    pos["cost"] = synthetic.taker_cost(pos["ask_yes" if side == "yes" else "ask_no"].to_numpy())
+    pos["cost"] = pos["paid"] = synthetic.taker_cost(
+        pos["ask_yes" if side == "yes" else "ask_no"].to_numpy())
     pos["pnl"] = np.where(pos["won"], PRICE_SCALE * SIZE_SCALE, 0) - pos["cost"]
-    pos["fill_time"] = pos["close_time"] = (BASE + pd.to_timedelta(pos["day"], unit="D")
-                                            + pd.Timedelta(hours=12))  # mid-day
+    pos["decision_time"] = pos["fill_time"] = pos["close_time"] = (
+        BASE + pd.to_timedelta(pos["day"], unit="D") + pd.Timedelta(hours=12))  # mid-day
     return pos
 
 
 def _daily(pos: pd.DataFrame, days: range) -> pd.Series:
     return daily_returns(pos, BASE + pd.Timedelta(days=days.start),
                          BASE + pd.Timedelta(days=days.stop))
-
-
-def _as_positions(pos: pd.DataFrame) -> gauntlet.Positions:
-    return gauntlet.Positions(
-        net_pnl=pos["pnl"].to_numpy(), paid=pos["cost"].to_numpy(), won=pos["won"].to_numpy(),
-        buy_yes=(pos["side"] == "yes").to_numpy(), count=np.full(len(pos), SIZE_SCALE),
-        p_yes=pos["p_yes"].to_numpy(), lo=pos["lo"].to_numpy(), hi=pos["hi"].to_numpy(),
-        cluster=pos["cluster"].to_numpy(), day=pos["day"].to_numpy())
 
 
 def _romano_wolf(conf: pd.DataFrame, configs: list, rng: np.random.Generator,
@@ -124,10 +121,10 @@ def one_world(rng: np.random.Generator, side: str = "no", quotes: str = "boundar
     t_in = best.mean() / (best.std(ddof=1) / np.sqrt(len(best))) if best.std() > 0 else 0.0
     pos = _positions(conf, chosen)
     conf_returns = _daily(pos, range(seam, days))
-    every = pd.concat([_positions(disc, c) for c in configs]).reset_index()
-    every = every.drop_duplicates(["index", "side"])  # one bet per contract and side
-    v = gauntlet.evaluate(disc_returns, _as_positions(every), conf_returns,
-                          _as_positions(pos), rng, gates)
+    recent = disc[disc["day"] >= seam - gates.dependence_days]
+    every = gauntlet.pooled([_positions(recent, c) for c in configs])
+    v = gauntlet.evaluate(disc_returns, gauntlet.Positions.from_frame(every), conf_returns,
+                          gauntlet.Positions.from_frame(pos), rng, gates)
     p_t = (scipy_stats.ttest_1samp(conf_returns, 0, alternative="greater").pvalue
            if conf_returns.std() > 0 else 1.0)
     p_win = np.where(pos["side"] == "yes", pos["q"], 1 - pos["q"])
@@ -214,6 +211,8 @@ GRID = [  # (label, worlds, one_world settings); no edge unless the label says s
                        "confirmation": {"events_per_day": 40}}),
     ("boundary, ladders all strike ladders, same-day shock ρ = 0.5", 2000,
      {"strike_share": 1.0, "shock": 0.5}),
+    ("boundary, binaries only, shock ρ = 0.5 from the seam on (none in discovery)", 2000,
+     {"bucket_share": 0.0, "confirmation": {"shock": 0.5}}),
     *[(f"{c}¢ lower NO asks on q < 0.15", 400, {"edge": synthetic.Edge(*LONGSHOTS, c)})
       for c in (0.5, 1, 2, 3)],
     *[(f"{c}¢ lower NO asks on q < 0.15, 100 events/day", 400,

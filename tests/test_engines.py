@@ -13,6 +13,7 @@ from kalshibot.research.backtest import fills
 from kalshibot.research.backtest.bars import bars
 from kalshibot.research.backtest.replay import replay
 from kalshibot.research.backtest.settle import settle
+from kalshibot.strategies.base import INTENT_COLUMNS
 
 T = lambda s: pd.Timestamp(s, tz="UTC")  # noqa: E731
 END = datetime(2026, 1, 3, tzinfo=UTC)
@@ -32,15 +33,16 @@ MARKETS = pd.DataFrame([("KXT-A", "yes", 10_000, T("2026-01-02")),
                         ("KXT-C", None, None, None),
                         ("KXT-S", "scalar", 3_700, T("2026-01-02"))],  # pays 37¢ per YES
                        columns=["ticker", "result", "settlement_value", "settlement_ts"])
-COLUMNS = fills.INTENT_COLUMNS
 TAKERS = pd.DataFrame([(1, "KXT-A", "yes", T("2026-01-01 00:00:30"), 1000, None),
                        (2, "KXT-B", "no", T("2026-01-01 00:01:00"), 300, None),
-                       (3, "KXT-C", "yes", T("2026-01-01 00:04:00"), 100, None)], columns=COLUMNS)
+                       (3, "KXT-C", "yes", T("2026-01-01 00:04:00"), 100, None)],
+                      columns=INTENT_COLUMNS)
 # YES then NO in one market and one bar: a close and reopen in the replay, two columns
 # (not one netted order) in the bars
 CYCLE = pd.DataFrame([(6, "KXT-S", "yes", T("2026-01-01 00:00:20"), 200, None),
                       (7, "KXT-S", "no", T("2026-01-01 00:00:25"), 200, None),
-                      (8, "KXT-S", "yes", T("2026-01-01 00:00:30"), 500, None)], columns=COLUMNS)
+                      (8, "KXT-S", "yes", T("2026-01-01 00:00:30"), 500, None)],
+                     columns=INTENT_COLUMNS)
 SCHEDULE = FeeSchedule([], {"KXT": ("quadratic", "1", "Test")})
 
 
@@ -101,7 +103,7 @@ def test_bar_closes_fill_whole_orders_even_at_stale_prices():
     got, _, _ = run(TAKERS, bars)
     assert by_intent(got) == {(1, 4200, 1000), (2, 4100, 300), (3, 2000, 100)}
     late = pd.DataFrame([(5, "KXT-B", "yes", T("2026-01-01 00:05:00"), 100, None)],
-                        columns=COLUMNS)
+                        columns=INTENT_COLUMNS)
     got, _, _ = run(late, bars)  # KXT-B last printed at 00:01:30
     assert by_intent(got) == by_intent(run(late)[0]) == {(5, 5900, 100)}  # so does Nautilus
     assert tier1(fills.taker_fills, late).empty  # no later print: no fill
@@ -117,7 +119,7 @@ LIMITS = pd.DataFrame([  # each pair straddles the price the engine fills at
     (12, "KXT-A", "yes", T("2026-01-01 00:00:30"), 1000, 4099),
     (13, "KXT-B", "no", T("2026-01-01 00:01:00"), 300, 4000),  # replay: 40¢ NO
     (14, "KXT-B", "no", T("2026-01-01 00:01:00"), 300, 3999),
-], columns=COLUMNS)
+], columns=INTENT_COLUMNS)
 
 
 def test_replay_limits_fill_only_within_their_price():
@@ -134,7 +136,7 @@ def test_replay_timing_doesnt_depend_on_where_the_tape_starts():
     # decided before KXT-C's first print and before the engine's first event: still
     # processed on arrival, when KXT-C has no print yet, so rejected, alone or not
     early = pd.DataFrame([(21, "KXT-C", "yes", T("2025-12-31 23:59:00"), 100, None)],
-                         columns=COLUMNS)
+                         columns=INTENT_COLUMNS)
     assert run(early)[0].empty
     assert run(pd.concat([early, TAKERS]))[0].query("intent_id == 21").empty
 
@@ -142,7 +144,7 @@ def test_replay_timing_doesnt_depend_on_where_the_tape_starts():
 @pytest.mark.parametrize("engine", [replay, bars])
 def test_engines_take_nothing_or_too_late_quietly(engine):
     late = pd.DataFrame([(22, "KXT-A", "yes", T("2026-01-02 00:00:00"), 100, None)],
-                        columns=COLUMNS)  # arrives after KXT-A settled
+                        columns=INTENT_COLUMNS)  # arrives after KXT-A settled
     for intents in (TAKERS.iloc[:0], late):
         got, pnl = engine(intents, TRADES, MARKETS, series_of, SCHEDULE, END, DIRECT_MEMBER)
         assert got.empty and pnl.empty and list(got.columns) == fills.FILL_COLUMNS

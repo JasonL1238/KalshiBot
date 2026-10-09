@@ -4,20 +4,35 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from kalshibot.research import calendar
 from kalshibot.research.validation import gauntlet
 
 RNG = np.random.default_rng(3)
 
 
-def test_holm_runs_over_every_preregistered_family():
+def test_holm_runs_over_every_preregistered_family(monkeypatch):
     # at m = 12 the smallest p needs ≤ 0.05/12 ≈ 0.0042 and the next ≤ 0.05/11 ≈ 0.0045;
     # at m = 2, ≤ 0.025 and ≤ 0.05
+    monkeypatch.setattr(calendar, "FORWARD", frozenset())
     gates = gauntlet.Gates(families=12)
     assert gauntlet.decide({"H1": 0.004, "H2": 0.006}, gates) == {"H1": True, "H2": False}
     assert gauntlet.decide({"H1": 0.004, "H2": 0.006}, gauntlet.Gates(families=2)) == {
         "H1": True, "H2": True}
     with pytest.raises(ValueError):
         gauntlet.decide({f"H{i}": 0.5 for i in range(13)}, gates)
+
+
+def test_a_forward_family_spends_only_its_own_share_of_alpha(monkeypatch):
+    # H1 confirmed forward: alone at 0.05/12; Holm over the other 11 places at 0.05 · 11/12
+    monkeypatch.setattr(calendar, "FORWARD", frozenset({"H1"}))
+    out = gauntlet.decide({"H1": 0.004, "H2": 0.004, "H3": 0.0045})
+    assert out == {"H1": True, "H2": True, "H3": True}  # H3: 10 × 0.0045 ≤ 0.05 · 11/12
+    assert gauntlet.decide({"H1": 0.0042, "H2": 0.004}) == {
+        "H1": False, "H2": True}  # 0.0042 > 0.05/12
+    assert gauntlet.decide({"H2": 0.004}) == {"H2": True}  # H1 pending
+    monkeypatch.undo()  # the registered forward set: H1 and H5 leave 10 places
+    with pytest.raises(ValueError, match="places"):
+        gauntlet.decide({f"H{i}": 0.5 for i in (2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13)})
 
 
 def test_a_family_passes_only_if_both_tests_reject():
@@ -50,6 +65,13 @@ def test_evaluate_finds_a_large_edge_and_reports_diagnostics():
     assert v.rho < 0.05 and abs(v.cross_day) < 0.3 and v.widening < 1.6  # independent
 
 
+def test_pooled_counts_each_bet_once():
+    a = pd.DataFrame({"ticker": ["X", "X", "Y"], "side": ["no", "yes", "no"],
+                      "decision_time": [1, 1, 1], "fill_count": [100, 100, 100]})
+    b = a.assign(fill_count=200)  # another configuration, the same bets at another size
+    assert len(gauntlet.pooled([a, b])) == 3
+
+
 def test_evaluate_refuses_inputs_outside_the_nulls_scope():
     days = 50
     discovery = pd.DataFrame(RNG.normal(0, 0.01, (days, 2)), columns=["a", "b"])
@@ -57,8 +79,8 @@ def test_evaluate_refuses_inputs_outside_the_nulls_scope():
     daily = pd.Series(np.zeros(days))
     with pytest.raises(ValueError):  # discovery outcomes leaking past the seam
         gauntlet.evaluate(discovery, conf, daily, conf, RNG, gauntlet.Gates(draws=50))
-    scalar = replace(conf, won=np.full(500, 0.4))  # not a binary payoff
+    overpaid = replace(conf, won=np.full(500, 1.4))  # more than $1 a contract
     seconds = replace(conf, day=conf.day * 86_400)  # not day numbers
-    for bad in (scalar, seconds):
+    for bad in (overpaid, seconds):
         with pytest.raises(ValueError):
             gauntlet.evaluate(discovery, disc, daily, bad, RNG, gauntlet.Gates(draws=50))

@@ -4,7 +4,9 @@ Every verdict in docs/STRATEGIES.md is computed here (the open-source engines ar
 alongside to measure model uncertainty, docs/BACKTESTING.md).
 
 - Fees: the costliest regime that could have applied (`FeeSchedule.plausible`), at the
-  stated member precision.
+  stated member precision. `rounding="balance"` charges every regime the fee rate itself
+  (Kalshi's 2026 method: the model fee to $0.000001, the balance change floored to the
+  member precision) instead of rounding each fill up to a cent, as a trader in size pays.
 - A fill whose market settled before `window_end` is paid its contract's settlement
   value (`yes_payoff`). Otherwise it is marked at the executable bid for its contract at
   `window_end`, less the taker fee to sell there. With no bid it is marked at 0.
@@ -14,6 +16,7 @@ alongside to measure model uncertainty, docs/BACKTESTING.md).
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 
 import numpy as np
@@ -25,9 +28,11 @@ from kalshibot.kalshi.models import PRICE_SCALE
 
 
 def charged_fee(schedule: FeeSchedule, series: str, ts: datetime, price: int, count: int, *,
-                buy: bool, maker: bool, precision: int) -> int:
-    """Micro-dollar fee of one fill under the costliest regime that could have applied."""
-    return max(fee(price, count, buy=buy, maker=maker, terms=t, precision=precision)
+                buy: bool, maker: bool, precision: int, rounding: str | None = None) -> int:
+    """Micro-dollar fee of one fill under the costliest regime that could have applied,
+    each with its own rounding or `rounding`."""
+    return max(fee(price, count, buy=buy, maker=maker, precision=precision,
+                   terms=replace(t, rounding=rounding) if rounding else t)
                for t in schedule.plausible(series, ts))
 
 
@@ -52,10 +57,11 @@ def settled(markets: pd.DataFrame, window_end: datetime) -> pd.Series:
 
 def settle(fills: pd.DataFrame, markets: pd.DataFrame, series_of: Callable[[str], str],
            schedule: FeeSchedule, window_end: datetime, precision: int,
-           bids: pd.DataFrame | None = None) -> pd.DataFrame:
+           bids: pd.DataFrame | None = None, rounding: str | None = None) -> pd.DataFrame:
     """fills: `fills.FILL_COLUMNS`. markets: ticker, result, settlement_value, settlement_ts
     (as known at window_end).
-    bids: ticker, side, bid (price units of that contract at window_end), optional."""
+    bids: ticker, side, bid (price units of that contract at window_end), optional.
+    rounding: overrides every fee regime's rounding (`charged_fee`)."""
     m = markets.set_index("ticker")
     m = m.assign(paid=yes_payoff(m), done=settled(m, window_end))
     out = fills.merge(m[["settlement_ts", "paid", "done"]], left_on="ticker", right_index=True,
@@ -70,14 +76,15 @@ def settle(fills: pd.DataFrame, markets: pd.DataFrame, series_of: Callable[[str]
     done = out["done"].fillna(False).astype(bool)
     series = out["ticker"].map(series_of)
     out["entry_fee"] = [
-        charged_fee(schedule, s, t, int(p), int(c), buy=True, maker=bool(m), precision=precision)
+        charged_fee(schedule, s, t, int(p), int(c), buy=True, maker=bool(m),
+                    precision=precision, rounding=rounding)
         for s, t, p, c, m in zip(series, out.fill_time, out.fill_price, out.fill_count,
                                  out.maker, strict=True)]
     per_contract = np.where(out["side"] == "yes", out["paid"], PRICE_SCALE - out["paid"])
     mark = out["bid"].fillna(0).astype("int64").where(~done, 0)
     out["exit_fee"] = [
         0 if d or b == 0 else charged_fee(schedule, s, window_end, int(b), int(c), buy=False,
-                                          maker=False, precision=precision)
+                                          maker=False, precision=precision, rounding=rounding)
         for d, s, b, c in zip(done, series, mark, out.fill_count, strict=True)]
     out["payoff"] = (np.where(done, per_contract, mark) * out["fill_count"]).round().astype("int64")
     out["cost"] = out["fill_price"] * out["fill_count"]
