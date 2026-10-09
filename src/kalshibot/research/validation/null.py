@@ -152,9 +152,12 @@ def simulate_totals(lo: np.ndarray, hi: np.ndarray, cluster: np.ndarray, buy_yes
                        buy_yes, count, p_yes) for start in range(0, n_draws, chunk)])
 
 
-def p_value(observed_net: float, null_net: np.ndarray) -> float:
-    """One-sided P(null ≥ observed), with the +1 correction so it is never exactly 0."""
-    return (1 + np.sum(null_net >= observed_net)) / (1 + len(null_net))
+def p_value(observed_net: float | np.ndarray, null_net: np.ndarray) -> float | np.ndarray:
+    """One-sided P(null ≥ observed) for one observed total or an array of them, with the +1
+    correction so it is never exactly 0."""
+    ordered = np.sort(np.asarray(null_net))
+    exceed = len(ordered) - np.searchsorted(ordered, observed_net, side="left")
+    return (1 + exceed) / (1 + len(ordered))
 
 
 def _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even) -> pd.DataFrame:
@@ -231,8 +234,9 @@ def dependence(won: np.ndarray, buy_yes: np.ndarray, count: np.ndarray, p_yes: n
     rho = float(np.clip(same / pairs, 0, 1)) if pairs > 0 else 0.0
     ys, ss = _calendar(big_y), _calendar(big_s)
     lags = min(int(np.ceil(np.sqrt(len(big_y)))), len(ys) - 1)
-    cross = tuple(float(np.clip(ys[:-h] @ ys[h:] / den, -1, 1)) if (den := ss[:-h] @ ss[h:])
-                  > 0 else 0.0 for h in range(1, lags + 1))
+    with np.errstate(all="ignore"):  # macOS Accelerate raises spurious flags in matmul
+        cross = tuple(float(np.clip(ys[:-h] @ ys[h:] / den, -1, 1))
+                      if (den := ss[:-h] @ ss[h:]) > 0 else 0.0 for h in range(1, lags + 1))
     return Dependence(rho, cross)
 
 
@@ -248,7 +252,8 @@ def widening(dep: Dependence, buy_yes: np.ndarray, count: np.ndarray, p_yes: np.
     if null_var <= 0:
         return 1.0
     a, lags = _calendar(days["A"]), len(dep.cross)
-    cross = sum((1 - h / (lags + 1)) * c * float(a[:-h] @ a[h:])
-                for h, c in enumerate(dep.cross, start=1) if h < len(a))
+    with np.errstate(all="ignore"):  # as in `dependence`
+        cross = sum((1 - h / (lags + 1)) * c * float(a[:-h] @ a[h:])
+                    for h, c in enumerate(dep.cross, start=1) if h < len(a))
     total = boundary + dep.rho * days["W"].sum() + 2 * cross
     return float(max(1.0, max(boundary, total) / null_var))

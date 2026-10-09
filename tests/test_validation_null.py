@@ -56,6 +56,12 @@ def test_p_values_are_uniform_when_prices_are_right():
     assert 0.02 < np.mean(np.array(pvals) < 0.05) < 0.09
 
 
+def test_a_null_total_tied_with_the_observed_one_counts_against_it():
+    simulated = np.array([3, 1, 2, 1])
+    assert null.p_value(np.array([1, 2]), simulated).tolist() == [5 / 5, 3 / 5]
+    assert null.p_value(2, simulated) == 3 / 5
+
+
 def surprises(days, per_day, rho, rng, phi=0.0, buy_yes=None):
     """Standalone longshots (NO, or YES where `buy_yes`); a same-day factor of strength
     rho, AR(1) across days with persistence phi."""

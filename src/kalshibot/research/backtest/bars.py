@@ -44,12 +44,13 @@ def bars(intents: pd.DataFrame, trades: pd.DataFrame, markets: pd.DataFrame,
     m = markets.set_index("ticker").reindex(sorted(set(intents["ticker"])))
     m = m.assign(paid=yes_payoff(m), done=settled(m, window_end))
     orders = intents.assign(bar=(pd.to_datetime(intents["decision_time"], utc=True)
-                                 + latency).dt.ceil(BAR))
+                                 .dt.as_unit("ns") + latency).dt.ceil(BAR))
     closed = orders["bar"] >= orders["ticker"].map(m["settlement_ts"])
     orders = orders[(orders["bar"] < end) & ~closed.fillna(False).astype(bool)]
 
     # the close at every order bar: the last print at or before the bar's end
-    tape = trades.assign(created_time=pd.to_datetime(trades["created_time"], utc=True))
+    tape = trades.assign(created_time=pd.to_datetime(trades["created_time"], utc=True)
+                         .dt.as_unit("ns"))
     last = pd.merge_asof(orders[["ticker", "bar"]].drop_duplicates().sort_values("bar"),
                          tape.sort_values("created_time")[["ticker", "created_time",
                                                            "yes_price"]],

@@ -77,7 +77,7 @@ def backfill_trades(
 
 research_app = typer.Typer(no_args_is_help=True, help="Evaluate a hypothesis family, "
                             "recorded in the trial ledger (docs/BACKTESTING.md, Pipeline).")
-app.add_typer(research_app, name="research")  # `confirm` comes with the power simulation
+app.add_typer(research_app, name="research")
 Family = Annotated[str, typer.Argument(help=f"One of {', '.join(FAMILIES)}")]
 
 
@@ -103,6 +103,30 @@ def research_candles(
     """The 1-minute candles the family's confirmation test prices its null from."""
     strategy, loader = _family(family)
     typer.echo(f"wrote {run.fetch_candles(strategy, loader, workers)} candle files")
+
+
+@research_app.command("confirm")
+def research_confirm(family: Family):
+    """The family's one confirmation test (it can't be repeated), then its Tier-2 report."""
+    strategy, loader = _family(family)
+    verdict = run.confirm(strategy, loader)
+    power = ledger.confirmation(family)["summary"]["power"]
+    typer.echo(f"{verdict.config}: p = {verdict.p_value:.4g} (null {verdict.p_null:.4g}, "
+               f"bootstrap {verdict.p_boot:.4g}); power at "
+               f"{power['edge'] / (PRICE_SCALE // 100):g}¢: {power['power']:.2f}; the rest is "
+               f"in {ledger.ledger_dir() / f'{family}.jsonl'}")
+    try:
+        typer.echo(f"Tier 2: {run.report(strategy, loader)}")
+    except Exception:
+        typer.echo(f"The verdict is recorded; its Tier-2 report failed. Rerun it with "
+                   f"`kalshibot research report {family}`.", err=True)
+        raise
+
+
+@research_app.command("report")
+def research_report(family: Family):
+    """The Tier-2 report on the family's confirmation again (it can't change the verdict)."""
+    typer.echo(run.report(*_family(family)))
 
 
 @app.command()

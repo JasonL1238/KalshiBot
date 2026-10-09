@@ -24,8 +24,8 @@ don't settle them.
 ## Pre-registrations
 
 Each family's design is fixed here before its confirmation test, which then runs once
-(`kalshibot research discover | candles FAMILY`, then the confirmation; the method and
-the gates: [BACKTESTING.md](BACKTESTING.md)).
+(`kalshibot research discover | candles | confirm FAMILY`; the method and the gates:
+[BACKTESTING.md](BACKTESTING.md)).
 
 ### H1 favorite–longshot bias (registered 2026-10-08)
 
@@ -55,7 +55,7 @@ H1's own choices; everything else is the pipeline's
 - **Fills:** the next print alone, with no candle leg, in both windows: a candle leg on
   discovery would need candles around every decision of all nine configurations.
 - **No path null:** positions are held to settlement.
-- **Smallest economically meaningful edge:** 0.5¢ net per contract.
+- **Smallest economically meaningful edge:** 0.5¢ net per contract (`min_edge`).
 - **Strata:** net PnL and positions by category are reported with the verdict, not
   tested. (The category × hypothesis matrix comes with H2–H12.)
 - **Known at registration and not used** (later data, none informing H1's design):

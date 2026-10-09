@@ -7,7 +7,7 @@ enforces it). Hypotheses, pre-registrations and verdicts:
 
 | File | What |
 |------|------|
-| `base.py` | `Strategy` (family, `max_hold`, configurations, intents) and `MarketData` protocols; `INTENT_COLUMNS`, the intent schema every tier takes |
+| `base.py` | `Strategy` (family, `max_hold`, `min_edge`, configurations, intents) and `MarketData` protocols; `INTENT_COLUMNS`, the intent schema every tier takes |
 | `favorite_longshot.py` | H1: buy the favorite's side as a taker at the day's first print past a threshold |
 
 `FAMILIES` (`__init__.py`) maps each family to its strategy; `kalshibot research` finds
@@ -20,4 +20,5 @@ families there.
   within the window, each strategy's tests include a truncation test (its intents
   before t don't change when the window ends at t).
 - Configurations are fixed at pre-registration: adding one later is a new trial in the
-  family's ledger, not an edit.
+  family's ledger, not an edit. So are `max_hold` and `min_edge`: every trial records
+  them, and `confirm` refuses if they changed since discovery.

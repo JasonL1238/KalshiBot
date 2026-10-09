@@ -6,11 +6,11 @@ Hypotheses and verdicts: [docs/STRATEGIES.md](../../../docs/STRATEGIES.md).
 | File | What |
 |------|------|
 | `calendar.py` | Research windows (discovery / confirmation / lockbox / forward), the families confirmed forward (`FORWARD`), and each hypothesis's confirmation window (`confirmation_window`) |
-| `ledger.py` | Append-only trial ledger (`ledger/<family>.jsonl`, committed: trials and the confirmation's start marker) plus trial returns; the single lockbox unlock |
+| `ledger.py` | Append-only trial ledger (`ledger/<family>.jsonl`, committed: trials, the confirmation's start marker, and reports on it) plus trial returns; the single lockbox unlock |
 | `load.py` | `Loader`: the only way research reads market data (one trade tape, candles, post-hoc masking, lockbox refusal), fee terms (`fee_schedule()`), the data hash trials record (`fingerprint()`), and when the tables were fetched (`fetched()`) |
 | `calibration.py` | Taker calibration by price paid (the favorite–longshot table; the M2 positive control) |
 | `quotes.py` | The null's prices and draws: mids from 1-minute candles, for every market of an exclusive event or the contract alone, searched for a day at a time (`needed`, `mids`); strike ladders read off Kalshi's tickers |
-| `run.py` | The research runner: `discover` (every configuration, recorded), `fetch_candles` (what the null prices from), `confirm` (the family's one confirmation test) |
+| `run.py` | The research runner: `discover` (every configuration, recorded), `fetch_candles` (what the null prices from), `confirm` (the family's one confirmation test, with its power and strata), `report` (Tier 2 on it) |
 | `backtest/` | Tier 1 (`fills.py`, `settle.py`: every verdict) and the Tier-2 engines (model uncertainty) |
 | `backtest/fills.py` | Conservative fill rules from the trade tape (taker: next same-side print; maker: strict trade-through); the fill schema |
 | `backtest/settle.py` | Net PnL per fill (costliest plausible fee regime, its own rounding or the fee rate itself; settlement value, including scalar results, or a mark at window end) and daily returns on one calendar |
@@ -19,9 +19,9 @@ Hypotheses and verdicts: [docs/STRATEGIES.md](../../../docs/STRATEGIES.md).
 | `validation/` | Anti-overfitting statistics and the measurements behind the gates |
 | `validation/null.py` | Market-calibrated null: inputs from de-vigged mids (multiplicative/Shin), cluster-coherent outcome draws, recentered PnL, same-day and cross-day dependence and the widening they imply, p-values |
 | `validation/stats.py` | PSR/DSR, effective trial count (ONC base step), PBO via CSCV, stationary-bootstrap p-value, Romano–Wolf step-down, Holm |
-| `validation/gauntlet.py` | The pre-registered decision procedure (`Gates`): discovery selection, the dependence sample, the confirmation test, Holm across families (forward ones at their own α/12); diagnostics |
+| `validation/gauntlet.py` | The pre-registered decision procedure (`Gates`): discovery selection, the dependence sample, the confirmation test and its power, Holm across families (forward ones at their own α/12); diagnostics |
 | `validation/synthetic.py` | Synthetic worlds with a known truth (boundary null for YES or NO buyers, planted edges, same-day shocks that can last for days) |
-| `validation/conformance.py` | Size and power of every candidate procedure on those worlds; the grid behind the gate choice |
+| `validation/conformance.py` | Size and power of every candidate procedure on those worlds (the grid behind the gate choice), and a check of `gauntlet.power` |
 
 ## Rules for code here
 

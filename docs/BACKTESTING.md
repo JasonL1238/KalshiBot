@@ -30,8 +30,9 @@ except what M3 fixes per family before its own confirmation test (the last list 
    engines that fill them their own way (below). `settle.py` prices their fills too, so
    the gap to Tier 1 is the fill model alone, and each engine's own PnL must equal
    `settle.py`'s on the same fills to the micro-dollar (`tests/test_engines.py`).
-   STRATEGIES.md reports the spread with every verdict. Maker strategies get a Tier 2
-   only from recorded order books.
+   `run.report` runs them on each confirmation after its verdict (in batches of
+   markets) and logs the spread, which STRATEGIES.md reports with every verdict. Maker
+   strategies get a Tier 2 only from recorded order books.
 5. **The gauntlet** (`research/validation/gauntlet.py`), once per hypothesis family:
    - discovery picks the configuration with the best Sharpe, all configurations on one
      zero-filled daily calendar;
@@ -51,8 +52,27 @@ except what M3 fixes per family before its own confirmation test (the last list 
    are reported as diagnostics. Why this test and not others: the conformance section.
 6. **Verdicts.** Validated (passes the lockbox or a forward confirmation), Promising
    (passes confirmation; the lockbox or L2 data is pending), Rejected, or Inconclusive:
-   the family's power at its smallest economically meaningful edge, simulated on its own
-   confirmation sample with the same machinery, is below 0.8.
+   the family's power at its smallest economically meaningful edge is below 0.8.
+   `gauntlet.power` simulates it on the family's own confirmation sample before any
+   outcome is read (and the start of the test records it): every position wins with
+   its break-even probability plus that edge, under the null's coupling, each day's
+   deviation scaled up by the dependence the null is widened for, applied to those
+   probabilities but never below its same-day part (the real bootstrap sees each day's
+   own variance, whatever the cross-day estimate), and both tests run on each simulated
+   world at α/12. Each position stands dated by the last decision in its cluster, which
+   is never after the cluster's last settlement; where settlements bunch more than last
+   decisions do, that spreads the days and overstates power, so a family's registration
+   compares the two datings on discovery, where outcomes may be read. Both legs see only
+   the positions the null prices; the rest (the ledger's `dropped_from_null`) can move
+   the real bootstrap's power either way, by how their edge per unit of risk differs.
+   Like the null, power relies on YES and NO positions offsetting under one ρ, which
+   understates a day's variance when one configuration buys both sides; such a
+   configuration needs a mixed-side world in conformance first. Conformance checks the
+   estimate against the gauntlet's measured power, over all worlds and over those whose
+   cross-day estimate is negative (the third table below). It passes if predicted power
+   never exceeds measured by more than 2 Monte Carlo standard errors of their per-world
+   difference (bold); a bold cell sends `gauntlet.power` back for revision before any
+   confirmation runs.
 
 The null covers contracts held to settlement (step 2 keeps only decisions whose
 positions must settle inside their window). A position still open at the window's end
@@ -88,7 +108,7 @@ confirmation test.
   after the seam.
 
 Fixed per family at M3 pre-registration, before its confirmation test: the minimum
-economically meaningful edge and the power there; whether it is confirmed forward; the
+economically meaningful edge (`Strategy.min_edge`); whether it is confirmed forward; the
 maximum holding period (which sets both embargoes and which markets count); the taker
 rule's candle leg (the worse of the next 1-minute candle's extreme and the next print,
 or the print alone); the window-end bids that mark open positions (until they're wired
@@ -155,7 +175,8 @@ the reference, and every engine's own PnL is reconciled against it.
 ## Conformance: how the confirmation test was chosen
 
 > Being re-measured for M3's dependence sample (discovery's last 400 days) and its new
-> world (a shock from the seam on); until then the tables below are M2's.
+> world (a shock from the seam on); until then the two tables below are M2's, and the
+> third (`python -m kalshibot.research.validation.conformance power`) is pending.
 
 `research/validation/conformance.py` runs the whole pipeline (selection, then the
 candidate tests) on synthetic worlds whose truth is known (`synthetic.py`). The family

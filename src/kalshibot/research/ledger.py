@@ -5,7 +5,8 @@ line per trial (`kind: "trial"`): what was evaluated, the window, data and code
 fingerprints, summary statistics. Each trial's daily returns go to
 `data_dir()/research/trials/` for selection, DSR, PBO, and effective-N. A family's one
 confirmation test is logged as started (`kind: "start"`, `begin_confirmation`) before it
-reads any outcome, so even a crash midway counts as the test.
+reads any outcome, so even a crash midway counts as the test. Reports on a recorded
+evaluation (`kind: "report"`) follow it.
 `ledger/lockbox.jsonl` holds the single lockbox unlock: exactly one entry naming the
 surviving families. Until it exists, the loader refuses lockbox data, and afterwards it
 serves it only to those families.
@@ -83,9 +84,11 @@ def record_trial(family: str, trial: dict[str, Any], window: str, data_hash: str
     return trial_id
 
 
-def begin_confirmation(family: str, trial: dict[str, Any], data_hash: str) -> None:
-    """Log that the family's one confirmation test starts now; refuse if it ever did. The
-    check and the entry happen under one lock, so two runs can't both start."""
+def begin_confirmation(family: str, trial: dict[str, Any], data_hash: str,
+                       before: dict[str, Any] | None = None) -> None:
+    """Log that the family's one confirmation test starts now, with what was fixed
+    `before` any outcome is read (its power); refuse if it ever did. The check and the
+    entry happen under one lock, so two runs can't both start."""
     with (ledger_dir() / f"{family}.jsonl").open("a+") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         f.seek(0)
@@ -94,14 +97,28 @@ def begin_confirmation(family: str, trial: dict[str, Any], data_hash: str) -> No
                                f"(ledger/{family}.jsonl)")
         f.write(canonical({"kind": "start", "time": datetime.now(UTC).isoformat(),
                            "family": family, "window": "confirmation", "trial": trial,
-                           "data_hash": data_hash, "commit": _commit()}) + "\n")
+                           "data_hash": data_hash, "before": before or {},
+                           "commit": _commit()}) + "\n")
+
+
+def record_report(family: str, window: str, report: dict[str, Any]) -> None:
+    """Append a report on an evaluation already recorded (`kind: "report"`), such as
+    the Tier-2 spread of a confirmation."""
+    _append(ledger_dir() / f"{family}.jsonl", {
+        "kind": "report", "time": datetime.now(UTC).isoformat(), "family": family,
+        "window": window, "report": report, "commit": _commit()})
 
 
 def trials(family: str) -> list[dict[str, Any]]:
-    """The family's trials, oldest first (start markers left out)."""
+    """The family's trials, oldest first (start markers and reports left out)."""
     path = ledger_dir() / f"{family}.jsonl"
     entries = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
     return [e for e in entries if e["kind"] == "trial"]
+
+
+def confirmation(family: str) -> dict[str, Any] | None:
+    """The family's confirmation trial, once it has had its test."""
+    return next((t for t in trials(family) if t["window"] == "confirmation"), None)
 
 
 def trial_returns(family: str, trial_ids: list[str]) -> pd.DataFrame:

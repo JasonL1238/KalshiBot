@@ -41,10 +41,13 @@ exchange. Whether it makes money is a result to measure, not an assumption.
     before showing it, and allows one confirmation test per family.
   - Per-family candle fetching (`research/run.py`): the null's quotes, then the candle
     leg of the taker rule and window-end bids.
+  - Each confirmation records its power at the family's smallest meaningful edge
+    (checked in conformance) and its results by category, and gets a Tier-2 report
+    after its verdict.
   - A path null (block-resampled, sign-randomized increments within a cluster) for
     families that exit before settlement, measured in conformance first.
   - Pre-register H1–H12 (m = 12, category strata), each with its minimum economically
-    meaningful edge and the power at that edge on its own confirmation sample.
+    meaningful edge.
   - Run every confirmation test.
   - Apply Holm once to the in-calendar families (forward ones are decided alone).
   - Open the lockbox once for all in-calendar survivors.

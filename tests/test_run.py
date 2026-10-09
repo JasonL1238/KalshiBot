@@ -1,6 +1,8 @@
 """The research runner on a small synthetic market: each day, a two-bucket event whose
 longshot bucket the test strategy buys NO on."""
 
+import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import numpy as np
@@ -8,11 +10,14 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+from typer.testing import CliRunner
 
+from kalshibot import cli
 from kalshibot.data import backfill as bf
 from kalshibot.research import calendar, ledger, run
 from kalshibot.research.backtest import settle
 from kalshibot.research.load import Loader, MissingData
+from kalshibot.research.validation import gauntlet
 from kalshibot.strategies.base import INTENT_COLUMNS
 
 D0 = datetime(2025, 1, 1, tzinfo=UTC)
@@ -25,6 +30,7 @@ class BuyNoEachMorning:
 
     family = "HX"
     max_hold = timedelta(days=1)
+    min_edge = 50
 
     def configs(self):
         return {"one": {"count": 100}, "two": {"count": 200}}
@@ -74,6 +80,8 @@ def market(tmp_path, monkeypatch):
     monkeypatch.setattr(calendar, "DISCOVERY_START", D0)
     monkeypatch.setattr(calendar, "BECKER_END", D0 + timedelta(days=20))
     monkeypatch.setattr(calendar, "LOCKBOX_START", D0 + timedelta(days=DAYS))
+    monkeypatch.setattr(gauntlet, "PREREGISTERED",  # power's machinery, not its precision
+                        replace(gauntlet.PREREGISTERED, power_worlds=20, power_resamples=200))
     Candles.calls = []
     kalshi = tmp_path / "raw" / "kalshi"
     rng = np.random.default_rng(0)
@@ -85,7 +93,8 @@ def market(tmp_path, monkeypatch):
         yes = bool(rng.random() < 0.1)
         rows = [{"trade_id": f"{ticker}-{k}", "ticker": ticker, "taker_side": side,
                  "created_time": day + timedelta(hours=10, minutes=k), "yes_price": 1000,
-                 "count": 1000, "is_block_trade": False} for k, side in enumerate(("no", "yes"))]
+                 "count": 1000, "is_block_trade": False}
+                for k, side in ((-60, "yes"), (0, "no"), (1, "yes"))]
         bf._write(rows, bf.trades_path(kalshi, day.date()), bf.TRADE_SCHEMA)
         for t, won, listed in ((ticker, yes, day), (f"{ticker}-B", not yes, day - timedelta(1))):
             markets.append({**blank, "ticker": t, "event_ticker": f"EV-{day.date()}",
@@ -112,13 +121,14 @@ def market(tmp_path, monkeypatch):
     return Loader(tmp_path, family="HX")
 
 
-def test_discover_fetch_confirm_once(market):
+def test_discover_fetch_confirm_once(market, monkeypatch):
     strategy = BuyNoEachMorning()
     discovery = run.discover(strategy, market)
     assert list(discovery.columns) == ["one", "two"] and len(discovery) == 20
     trials = ledger.trials("HX")
     assert [t["window"] for t in trials] == ["discovery", "discovery"]
     assert trials[0]["trial"]["max_hold"] == "1 day, 0:00:00"
+    assert trials[0]["trial"]["min_edge"] == 50
     with pytest.raises(MissingData):  # candles first; refusing doesn't use up the test
         run.confirm(strategy, market)
     lines = (market.kalshi_dir.parents[1] / "ledger" / "HX.jsonl").read_text().splitlines()
@@ -126,14 +136,98 @@ def test_discover_fetch_confirm_once(market):
     assert run.fetch_candles(strategy, market, workers=2, make_client=Candles) > 0
     rounds = len({start for _, start in Candles.calls})
     assert rounds > 1 and run.fetch_candles(strategy, market, make_client=Candles) == 0
+    seen, power = [], gauntlet.power
+    monkeypatch.setattr(gauntlet, "power", lambda d, p, *a: seen.append(p) or power(d, p, *a))
     verdict = run.confirm(strategy, market)
+    assert len(set(seen[0].day)) == 18  # power's positions dated by decision, one a day
     assert 0 < verdict.p_value <= 1 and verdict.config in {"one", "two"}
     done = ledger.trials("HX")[-1]
     assert done["window"] == "confirmation" and done["summary"]["seed"] == run._seed("HX")
     assert done["summary"]["tested"] == done["summary"]["positions"] == 18
     assert done["summary"]["discovery_trials"] == [t["trial_id"] for t in trials]
+    assert 0 <= done["summary"]["power"]["power"] <= 1
+    assert done["summary"]["by_category"]["Test"]["positions"] == 18
+    entries = [json.loads(line) for line in (market.kalshi_dir.parents[1] / "ledger"
+                                             / "HX.jsonl").read_text().splitlines()]
+    assert [e["before"] for e in entries if e["kind"] == "start"] == [
+        {"power": done["summary"]["power"]}]  # fixed before any outcome was read
     with pytest.raises(RuntimeError):
         run.confirm(strategy, market)
+    assert ledger.trials("HX")[-1] == done
+
+
+def test_tier2_reports_after_the_verdict_and_again(market, monkeypatch):
+    strategy = BuyNoEachMorning()
+    run.discover(strategy, market)
+    with pytest.raises(RuntimeError, match="no confirmation"):
+        run.report(strategy, market)
+    run.fetch_candles(strategy, market, make_client=Candles)
+    run.confirm(strategy, market)
+    done = ledger.trials("HX")[-1]
+    report = run.report(strategy, market)
+    tier1, tiers = report["tier1"], report["tier2"]
+    assert tier1 == {"intents": 18, "contracts": 18.0, "net_pnl": done["summary"]["net_pnl"]}
+    assert report["confirmation"] == done["trial_id"]
+    for engine in ("nautilus", "vectorbt"):  # both fill all 18 as Tier 1 does; books agree
+        assert tiers[engine] == tier1 | {"accounting_gap": 0}
+    monkeypatch.setattr(run, "TIER2_MARKETS", 1)  # batching changes nothing
+    assert run.report(strategy, market)["tier2"] == tiers
+    lines = (market.kalshi_dir.parents[1] / "ledger" / "HX.jsonl").read_text().splitlines()
+    kinds = [json.loads(line)["kind"] for line in lines]
+    assert kinds[-3:] == ["trial", "report", "report"] and ledger.trials("HX")[-1] == done
+    assert json.loads(lines[-2])["report"] == json.loads(json.dumps(report))
+
+    monkeypatch.setattr(run, "TIER2_MARKETS", 200)
+    replay = run.replay.replay
+
+    def skewed(*args):  # its books disagree by ±0.5¢ a market, which cancel in a sum
+        got, own = replay(*args)
+        return got, own.assign(pnl=own["pnl"] + np.resize([5_000, -5_000], len(own)))
+
+    monkeypatch.setattr(run.replay, "replay", skewed)
+    assert run.report(strategy, market)["tier2"]["nautilus"]["accounting_gap"] == 18 * 5_000
+
+    class Fewer(BuyNoEachMorning):  # its code changed since the confirmation
+        def intents(self, *args):
+            return super().intents(*args).iloc[::2]
+
+    class More(BuyNoEachMorning):  # ... adding intents only Tier 2 fills (an older print)
+        def intents(self, *args):
+            mine = super().intents(*args)
+            late = mine.assign(intent_id=mine["intent_id"] + len(mine), side="yes",
+                               decision_time=mine["decision_time"] + pd.Timedelta("31min"))
+            return pd.concat([mine, late], ignore_index=True)
+
+    for changed in (Fewer(), More()):
+        with pytest.raises(RuntimeError, match="no longer what"):
+            run.report(changed, market)
+
+
+def test_tier2_refuses_a_changed_configuration_and_skips_makers(market):
+    window = list(calendar.confirmation_window("HX"))
+
+    class Maker(BuyNoEachMorning):
+        def configs(self):
+            return {"one": {"count": 100, "maker": True, "horizon": timedelta(hours=1)}}
+
+    trial = {"name": "one", "config": Maker().configs()["one"], "max_hold": timedelta(days=1),
+             "min_edge": 50, "window": window}
+    ledger.record_trial("HX", trial, "confirmation", "x", pd.Series(dtype=float),
+                        {"positions": 0, "net_pnl": 0})
+    assert "order books" in run.report(Maker(), market)["tier2"]
+    with pytest.raises(RuntimeError, match="isn't what"):
+        run.report(BuyNoEachMorning(), market)
+
+
+def test_the_cli_runs_the_confirmation_and_its_report(market, monkeypatch):
+    strategy = BuyNoEachMorning()
+    monkeypatch.setitem(cli.FAMILIES, "HX", strategy)
+    runner = CliRunner()
+    assert runner.invoke(cli.app, ["research", "discover", "HX"]).exit_code == 0
+    run.fetch_candles(strategy, market, make_client=Candles)
+    out = runner.invoke(cli.app, ["research", "confirm", "HX"])
+    assert out.exit_code == 0 and "power at 0.5¢" in out.output and "Tier 2" in out.output
+    assert runner.invoke(cli.app, ["research", "report", "HX"]).exit_code == 0
 
 
 def test_a_forward_family_confirms_on_its_own_window(market, monkeypatch):
@@ -160,15 +254,24 @@ def test_confirm_refuses_markets_fetched_before_the_window_ended(market, monkeyp
     assert '"confirmation"' not in ledger_file.read_text()  # no start marker either
 
 
-def test_a_crash_settling_happens_before_the_test_starts(market, monkeypatch):
+@pytest.mark.parametrize("module, name", [(settle, "charged_fee"), (gauntlet, "power")])
+def test_a_crash_settling_or_in_power_happens_before_the_test_starts(market, monkeypatch,
+                                                                       module, name):
     strategy = BuyNoEachMorning()
     run.discover(strategy, market)
     run.fetch_candles(strategy, market, make_client=Candles)
-    monkeypatch.setattr(run.settle, "charged_fee", lambda *a, **k: 1 / 0)
+    monkeypatch.setattr(module, name, lambda *a, **k: 1 / 0)
     with pytest.raises(ZeroDivisionError):
         run.confirm(strategy, market)
     ledger_file = market.kalshi_dir.parents[1] / "ledger" / "HX.jsonl"
     assert '"confirmation"' not in ledger_file.read_text()
+
+
+def test_power_dates_each_position_by_its_clusters_last_decision():
+    n = np.zeros(3)
+    decided = gauntlet.Positions(n, n, n, n.astype(bool), n, n, n, n + 1,
+                                 cluster=np.array([0, 0, 1]), day=np.array([3, 5, 4]))
+    assert run._by_last_decision(decided).day.tolist() == [5, 5, 4]
 
 
 def test_confirm_needs_discovery_as_configured_now(market):
@@ -180,8 +283,11 @@ def test_confirm_needs_discovery_as_configured_now(market):
         def configs(self):
             return {"one": {"count": 100}}
 
+    class Pickier(BuyNoEachMorning):  # power judged at another edge
+        min_edge = 100
+
     run.discover(BuyNoEachMorning(), market)
-    for changed in (Changed(), Fewer()):
+    for changed in (Changed(), Fewer(), Pickier()):
         with pytest.raises(RuntimeError, match="run discover"):
             run.confirm(changed, market)
     with pytest.raises(ValueError):

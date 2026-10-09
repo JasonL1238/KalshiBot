@@ -15,8 +15,10 @@ def test_a_small_world_yields_every_procedures_decision():
     """Fast: the grid's machinery runs end to end and reports every procedure."""
     results = [conformance.one_world(np.random.default_rng(i), discovery_days=30,
                                      confirmation_days=20, events_per_day=10, favorites=True,
-                                     gates=Gates(draws=200)) for i in range(2)]
+                                     gates=Gates(draws=200, power_worlds=20, power_resamples=100),
+                                     predict=True) for i in range(2)]
     assert set(conformance.PROCEDURES) <= set(conformance.rates(results))
+    assert all(0 <= r["power_predicted"] <= 1 for r in results)
 
 
 def test_backtesting_doc_shows_the_reports_tables():
@@ -36,4 +38,4 @@ def test_size_at_the_boundary_null():
 @pytest.mark.slow
 def test_power_against_a_large_edge():
     results = conformance.simulate(100, seed=102, edge=synthetic.Edge(0.0, 0.15, 3.0))
-    assert conformance.rates(results, 0.05 / 12)["gauntlet"] >= 0.85
+    assert conformance.rates(results, conformance.GATES.level)["gauntlet"] >= 0.85

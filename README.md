@@ -20,6 +20,8 @@ kalshibot backfill reference             # every series, event, and non-combo ma
 kalshibot backfill trades --start YYYY-MM-DD --end YYYY-MM-DD   # trade tape by UTC day
 kalshibot research discover H1           # a family's configurations on discovery, logged
 kalshibot research candles H1            # the quotes its confirmation test needs
+kalshibot research confirm H1            # its one confirmation test (once its window ends)
+kalshibot research report H1             # Tier 2 on that confirmation, again
 ```
 
 Market data uses Kalshi's public endpoints and needs no account. Recording live order

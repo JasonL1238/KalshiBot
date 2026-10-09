@@ -23,6 +23,7 @@ SLIPPAGE = 200  # price units the limit allows past the deciding print
 class FavoriteLongshot:
     family = "H1"
     max_hold = timedelta(days=15)
+    min_edge = 50  # 0.5¢ a contract
 
     def configs(self) -> dict[str, dict[str, Any]]:
         no = {f"NO at YES ≤ {c}¢": {"buy": "no", "yes_price": c * 100} for c in (3, 5, 10, 15, 20)}

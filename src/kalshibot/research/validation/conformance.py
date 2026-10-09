@@ -26,7 +26,8 @@ decision procedures use, and `PROCEDURES` turns them into "edge found":
 rate) where the truth has no edge, its power where it has one. `python -m
 kalshibot.research.validation.conformance` runs `GRID`, the worlds behind the gate choice,
 and prints the two tables in docs/BACKTESTING.md; append rows only, since each row is
-seeded by its position.
+seeded by its position. `... conformance power` checks `gauntlet.power`, the estimate
+behind an Inconclusive verdict, against the gauntlet's measured power (`PREDICTION_GRID`).
 """
 
 from __future__ import annotations
@@ -47,7 +48,8 @@ from kalshibot.research.validation import gauntlet, null, stats, synthetic
 
 THRESHOLDS = [600, 700, 800, 1000, 1200, 1500, 2000]  # YES ask cutoffs, price units
 FAVORITES = 8000  # the mixed family also buys YES at asks of at least this
-GATES = replace(gauntlet.PREREGISTERED, draws=2_000)  # fewer draws: slightly less power
+# fewer draws (slightly less power); a power estimate here bootstraps as the test does
+GATES = replace(gauntlet.PREREGISTERED, draws=2_000, power_worlds=200, power_resamples=2_000)
 MIN_DSR, MAX_PBO = 0.95, 0.2  # candidate gates, measured
 BASE = pd.Timestamp("2020-01-01", tz="UTC")  # day 0 of every world
 
@@ -101,9 +103,11 @@ def one_world(rng: np.random.Generator, side: str = "no", quotes: str = "boundar
               discovery_days: int = 400, confirmation_days: int = 100,
               events_per_day: int = 20, favorites: bool = False,
               confirmation: dict | None = None, gates: gauntlet.Gates = GATES,
-              **world) -> dict[str, float]:
+              predict: bool = False, **world) -> dict[str, float]:
     """Every decision statistic for one synthetic world. `world` goes to `synthetic.world`
-    for both periods; `confirmation` overrides it (and `events_per_day`) for the second."""
+    for both periods; `confirmation` overrides it (and `events_per_day`) for the second.
+    With `predict`, also `gauntlet.power` on the chosen configuration's confirmation
+    sample at the world's true net edge."""
     seam, days = discovery_days, discovery_days + confirmation_days
     later = {"events_per_day": events_per_day, **world, **(confirmation or {})}
     df = pd.concat([synthetic.world(seam, events_per_day, rng, quotes, side=side, **world),
@@ -129,10 +133,15 @@ def one_world(rng: np.random.Generator, side: str = "no", quotes: str = "boundar
            if conf_returns.std() > 0 else 1.0)
     p_win = np.where(pos["side"] == "yes", pos["q"], 1 - pos["q"])
     ask = np.where(pos["side"] == "yes", pos["ask_yes"], pos["ask_no"])
-    return {**asdict(v), "p_value": v.p_value, "t_in": float(t_in), "p_t": float(p_t),
-            "p_rw": _romano_wolf(conf, configs, rng, gates.draws),
-            "edge_per_position": float(synthetic.taker_net(p_win, ask).mean()) if len(pos)
-            else 0.0, "positions_per_day": len(pos) / confirmation_days}
+    edge = float(synthetic.taker_net(p_win, ask).mean()) if len(pos) else 0.0
+    out = {**asdict(v), "p_value": v.p_value, "t_in": float(t_in), "p_t": float(p_t),
+           "p_rw": _romano_wolf(conf, configs, rng, gates.draws),
+           "edge_per_position": edge, "positions_per_day": len(pos) / confirmation_days}
+    if predict:
+        out["power_predicted"] = gauntlet.power(
+            gauntlet.Positions.from_frame(every), gauntlet.Positions.from_frame(pos),
+            np.arange(seam, days), round(edge / SIZE_SCALE), rng, gates)
+    return out
 
 
 def _dsr_ok(s):
@@ -167,7 +176,7 @@ def simulate(worlds: int, seed: int = 0, **kwargs) -> list[dict[str, float]]:
         return list(pool.map(_world_task, tasks, chunksize=4))
 
 
-def rates(results: list[dict[str, float]], alpha: float = 0.05) -> dict[str, float]:
+def rates(results: list[dict[str, float]], alpha: float = GATES.alpha) -> dict[str, float]:
     """Share of worlds in which each procedure declares an edge at level `alpha`, plus
     the means of `MEANS` (the true net edge per confirmed position in micro-dollars, the
     gauntlet's dependence estimates and widening, confirmed positions per day)."""
@@ -233,7 +242,7 @@ def _has_edge(kwargs: dict) -> bool:
 
 
 def _cell(rates_by_alpha: dict, column: str, worlds: int | None) -> str:
-    """'% at α = 0.05 / % at 0.05/12', bold where a no-edge rate is over α + 2 SE."""
+    """'% at α / % at α/m', bold where a no-edge rate is over α + 2 SE."""
     out = []
     for alpha, r in rates_by_alpha.items():
         text = f"{100 * r[column]:.1f}"
@@ -249,15 +258,22 @@ POWER_HEADER = ("| Edge world | true net edge per position | positions/day | "
                 + " | ".join(POWER_COLUMNS) + " |")
 
 
+def _rows(grid: list, scale: float, seed: int = 0, **extra):
+    """(label, worlds, settings, `one_world` results) for each row of a grid, in order,
+    each row seeded by its position."""
+    for i, (label, worlds, kwargs) in enumerate(grid):
+        n = max(20, int(worlds * scale))
+        yield label, n, kwargs, simulate(n, seed=seed + i, **extra, **kwargs)
+        print(f"{label}: done", file=sys.stderr, flush=True)
+
+
 def report(scale: float = 1.0) -> str:
-    """The two tables in docs/BACKTESTING.md, from `GRID` (`scale` shrinks it)."""
+    """The size and power tables in docs/BACKTESTING.md, from `GRID` (`scale` shrinks it)."""
     size = [SIZE_HEADER, "|---|---|---|---|---|" + "---|" * len(PROCEDURES)]
     power = [POWER_HEADER, "|---|---|---|" + "---|" * len(POWER_COLUMNS)]
-    for i, (label, worlds, kwargs) in enumerate(GRID):
-        n = max(20, int(worlds * scale))
-        results = simulate(n, seed=i, **kwargs)
-        by_alpha = {a: rates(results, a) for a in (0.05, 0.05 / 12)}
-        r = by_alpha[0.05]
+    for label, n, kwargs, results in _rows(GRID, scale):
+        by_alpha = {a: rates(results, a) for a in (GATES.alpha, GATES.level)}
+        r = by_alpha[GATES.alpha]
         if _has_edge(kwargs):
             power.append(f"| {label} | {r['edge_per_position'] / CENT:+.2f}¢ | "
                          f"{r['positions_per_day']:.1f} | "
@@ -266,9 +282,62 @@ def report(scale: float = 1.0) -> str:
             size.append(f"| {label} | {n} | {r['rho']:.3f} | {r['cross_day']:.2f} | "
                         f"{r['widening']:.2f} | "
                         + " | ".join(_cell(by_alpha, c, n) for c in PROCEDURES) + " |")
-        print(f"{label}: done", file=sys.stderr, flush=True)
     return "\n".join(size) + "\n\n" + "\n".join(power)
 
 
+PREDICTION_GRID = [  # (label, worlds, one_world settings): edges on every contract bought
+    ("0.5¢ lower asks", 300, {"edge": synthetic.Edge(0.0, 1.0, 0.5)}),
+    ("1¢ lower asks", 300, {"edge": synthetic.Edge(0.0, 1.0, 1)}),
+    ("1¢ lower asks, binaries only, shock ρ = 0.5", 300,
+     {"edge": synthetic.Edge(0.0, 1.0, 1), **BINARIES_SHOCK}),
+    ("0.5¢ lower asks, binaries only, shock ρ = 0.3, 100 events/day", 300,
+     {"edge": synthetic.Edge(0.0, 1.0, 0.5), "shock": 0.3, "bucket_share": 0.0,
+      "events_per_day": 100}),
+    ("1¢ lower asks, binaries only, shock ρ = 0.5 lasting days (φ = 0.8)", 300,
+     {"edge": synthetic.Edge(0.0, 1.0, 1), **BINARIES_SHOCK, "persistence": 0.8}),
+    ("0.5¢ lower asks, 100 events/day", 300,
+     {"edge": synthetic.Edge(0.0, 1.0, 0.5), "events_per_day": 100}),
+    ("YES family: 1¢ lower asks", 300, {"side": "yes", "edge": synthetic.Edge(0.0, 1.0, 1)}),
+    ("mixed family (adds YES favorites): 1¢ lower NO asks, binaries only, shock ρ = 0.3, "
+     "100 events/day", 300, {"favorites": True, "edge": synthetic.Edge(0.0, 1.0, 1),
+                            "shock": 0.3, "bucket_share": 0.0, "events_per_day": 100}),
+]
+PREDICTION_HEADER = ("| Edge world | true net edge per position | widening | power "
+                     "predicted / gauntlet's | the same where the cross-day estimate is "
+                     "negative (worlds) |")
+
+
+def _calibration(results: list[dict[str, float]]) -> str:
+    """'predicted / measured' power at α/m, in %, over `results`; bold where predicted
+    exceeds measured by more than 2 Monte Carlo standard errors of their per-world
+    difference (the pass rule, docs/BACKTESTING.md step 6)."""
+    if len(results) < 2:
+        return "–"
+    predicted = np.array([s["power_predicted"] for s in results])
+    found = np.array([PROCEDURES["gauntlet"](s, GATES.level) for s in results], dtype=float)
+    gap = predicted - found
+    text = f"{100 * predicted.mean():.1f} / {100 * found.mean():.1f}"
+    return f"**{text}**" if gap.mean() > 2 * gap.std(ddof=1) / np.sqrt(len(gap)) else text
+
+
+def prediction_report(scale: float = 1.0) -> str:
+    """The predicted-vs-measured power table in docs/BACKTESTING.md: `gauntlet.power`'s
+    estimate, made as `confirm` makes it with conformance's draws, against how often the
+    gauntlet found the edge, both at α/m; again over the worlds whose cross-day estimate
+    is negative, where a per-day error would show (`gauntlet.power`). Synthetic positions
+    settle on their decision day, so this doesn't measure the stand-in `confirm` uses for
+    later settlement."""
+    rows = [PREDICTION_HEADER, "|---|---|---|---|---|"]
+    for label, _, _, results in _rows(PREDICTION_GRID, scale, seed=1000, predict=True):
+        r, tilted = rates(results), [s for s in results if s["cross_day"] < 0]
+        rows.append(f"| {label} | {r['edge_per_position'] / CENT:+.2f}¢ | "
+                    f"{r['widening']:.2f} | {_calibration(results)} | "
+                    f"{_calibration(tilted)} ({len(tilted)}) |")
+    return "\n".join(rows)
+
+
 if __name__ == "__main__":
-    print(report(float(sys.argv[1]) if len(sys.argv) > 1 else 1.0))
+    if sys.argv[1:2] == ["power"]:
+        print(prediction_report(float(sys.argv[2]) if len(sys.argv) > 2 else 1.0))
+    else:
+        print(report(float(sys.argv[1]) if len(sys.argv) > 1 else 1.0))

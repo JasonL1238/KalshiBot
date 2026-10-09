@@ -35,6 +35,7 @@ class Strategy(Protocol):
     # as-listed latest expiration is at most this long after it; Kalshi lists that about a
     # week after the scheduled close, so this is usually the hold plus a week.
     max_hold: timedelta
+    min_edge: int  # the smallest net edge worth having, price units per contract
 
     def configs(self) -> dict[str, dict[str, Any]]:
         """Every configuration by name, fixed at pre-registration. Keys the backtest

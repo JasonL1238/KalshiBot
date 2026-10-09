@@ -9,8 +9,10 @@ confirmation test (docs/BACKTESTING.md, Pipeline).
    configuration on the last discovery days the dependence estimates use
    (`Gates.dependence_days`). It reads intents and fills, never an outcome.
 3. `confirm`: the selected configuration, once, on its confirmation window; the
-   gauntlet's verdict. The test is logged as started before any outcome is read, and its
-   random draws are seeded by the family, so the verdict is reproducible.
+   gauntlet's verdict, with its power at the family's smallest meaningful edge and its
+   results by category. The test is logged as started before any outcome is read, and
+   its random draws are seeded by the family, so the verdict is reproducible.
+4. `report`: Tier 2 on the confirmation, after the verdict.
 
 Every evaluation is Tier 1 (`backtest/fills.py`, `backtest/settle.py`), net of the fee
 rate at a direct member's precision (`_settled`), on the calendar's windows
@@ -26,6 +28,7 @@ import hashlib
 from collections.abc import Callable
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta
+from itertools import batched
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -34,14 +37,15 @@ import pandas as pd
 from kalshibot.data.backfill import backfill_candles, public_clients
 from kalshibot.kalshi import KalshiClient
 from kalshibot.kalshi.fees import DIRECT_MEMBER
-from kalshibot.kalshi.models import PRICE_SCALE
+from kalshibot.kalshi.models import PRICE_SCALE, SIZE_SCALE
 from kalshibot.research import calendar, ledger, quotes
-from kalshibot.research.backtest import fills, settle
+from kalshibot.research.backtest import bars, fills, replay, settle
 from kalshibot.research.load import Loader
 from kalshibot.research.validation import gauntlet, null, stats
 from kalshibot.strategies.base import INTENT_COLUMNS, Strategy
 
 _EPOCH = pd.Timestamp("1970-01-01", tz="UTC")
+TIER2_MARKETS = 200  # markets per Tier-2 batch (vectorbt holds a bars × markets matrix)
 _Window = tuple[datetime, datetime]
 
 
@@ -70,12 +74,11 @@ def _check(strategy: Strategy, loader: Loader) -> None:
         raise ValueError(f"the loader reads for {loader.family!r}, not {strategy.family!r}")
 
 
-def _fills(strategy: Strategy, loader: Loader, config: dict[str, Any], start: datetime,
-           end: datetime) -> tuple[pd.DataFrame, int]:
-    """Tier-1 fills, with their decision_time, of the configuration's intents decided in
-    [start + max_hold, end − max_hold) on markets whose as-listed latest expiration is
-    at most max_hold later; and how many intents in that span the latter rule dropped.
-    The fill rules run in the loader's DuckDB, on the tape of the markets traded only."""
+def _intents(strategy: Strategy, loader: Loader, config: dict[str, Any], start: datetime,
+             end: datetime) -> tuple[pd.DataFrame, int]:
+    """The configuration's intents decided in [start + max_hold, end − max_hold) on
+    markets whose as-listed latest expiration is at most max_hold later, and how many
+    intents in that span the latter rule dropped."""
     hold, con = strategy.max_hold, loader.con
     first, last = start + hold, end - hold
     intents = strategy.intents(_Until(loader, last), first, last, config)
@@ -90,7 +93,22 @@ def _fills(strategy: Strategy, loader: Loader, config: dict[str, Any], start: da
     t = intents["decision_time"]
     inside = ((t >= first) & (t < last)).to_numpy()
     anchored = (intents["ticker"].map(latest) - t <= hold).to_numpy()
-    intents = intents[inside & anchored].reset_index(drop=True)
+    return intents[inside & anchored].reset_index(drop=True), int((inside & ~anchored).sum())
+
+
+def _fills(strategy: Strategy, loader: Loader, config: dict[str, Any], start: datetime,
+           end: datetime) -> tuple[pd.DataFrame, int]:
+    """Tier-1 fills, with their decision_time, of `_intents`, and how many intents its
+    holding rule dropped."""
+    intents, outside = _intents(strategy, loader, config, start, end)
+    return _fill(loader, intents, config, start, end), outside
+
+
+def _fill(loader: Loader, intents: pd.DataFrame, config: dict[str, Any], start: datetime,
+          end: datetime) -> pd.DataFrame:
+    """Tier-1 fills of `intents`, with their decision_time. The fill rules run in the
+    loader's DuckDB, on the tape of the markets traded only."""
+    con = loader.con
     con.register("run_intents", intents)
     loader.trades(start, end).join(con.from_df(intents[["ticker"]].drop_duplicates()),
                                    "ticker").create_view("run_trades", replace=True)
@@ -98,40 +116,68 @@ def _fills(strategy: Strategy, loader: Loader, config: dict[str, Any], start: da
         filled = fills.maker_fills(con, "run_intents", "run_trades", horizon=config["horizon"])
     else:
         filled = fills.taker_fills(con, "run_intents", "run_trades")
-    return (filled.df().merge(intents[["intent_id", "decision_time"]], on="intent_id"),
-            int((inside & ~anchored).sum()))
+    return filled.df().merge(intents[["intent_id", "decision_time"]], on="intent_id"
+                             ).sort_values("intent_id", ignore_index=True)
 
 
-def _settled(loader: Loader, filled: pd.DataFrame, end: datetime,
+def _markets(loader: Loader, tickers: pd.Series, end: datetime,
              outcomes: bool = True) -> pd.DataFrame:
-    """`settle.settle` of fills in a window ending at `end`, as known then, net of the
-    fee rate itself; `pnl_cent_rounded` is the PnL with each fill's fee rounded up to a
-    cent as the regime may have (order size decides which a trader pays, and tiny fills
-    pay the cent). Without `outcomes`, every market reads as unsettled: a dry run that
-    reads no result."""
+    """ticker, series_ticker, category and outcome columns of `tickers` as known at `end`.
+    Without `outcomes`, every market reads as unsettled."""
     known = ("result, settlement_value, settlement_ts" if outcomes else
              "NULL::VARCHAR AS result, NULL::BIGINT AS settlement_value, "
              "NULL::TIMESTAMPTZ AS settlement_ts")
-    markets = loader.markets(end).project(f"ticker, series_ticker, {known}").join(
-        loader.con.from_df(filled[["ticker"]].drop_duplicates()), "ticker").df()
-    series, schedule = markets.set_index("ticker")["series_ticker"].get, loader.fee_schedule()
+    return loader.markets(end).project(f"ticker, series_ticker, category, {known}").join(
+        loader.con.from_df(pd.DataFrame({"ticker": pd.unique(tickers)})), "ticker").df()
+
+
+def _priced(filled: pd.DataFrame, markets: pd.DataFrame, schedule, end: datetime
+            ) -> pd.DataFrame:
+    """`settle.settle` of fills net of the fee rate itself; `pnl_cent_rounded` is the PnL
+    with each fill's fee rounded up to a cent as the regime may have (order size decides
+    which a trader pays, and tiny fills pay the cent)."""
+    series = markets.set_index("ticker")["series_ticker"].get
     out = settle.settle(filled, markets, series, schedule, end, DIRECT_MEMBER,
                         rounding="balance")
     rounded = settle.settle(filled, markets, series, schedule, end, DIRECT_MEMBER)
     return out.assign(pnl_cent_rounded=rounded["pnl"].to_numpy())
 
 
+def _settled(loader: Loader, filled: pd.DataFrame, end: datetime,
+             outcomes: bool = True) -> pd.DataFrame:
+    """`_priced` fills in a window ending at `end`, as known then. Without `outcomes`, a
+    dry run that reads no result."""
+    return _priced(filled, _markets(loader, filled["ticker"], end, outcomes),
+                   loader.fee_schedule(), end)
+
+
 def _trial(strategy: Strategy, name: str, config: dict[str, Any], window: _Window) -> dict:
     """A trial as the ledger records it: everything that shapes the evaluation besides
-    the code (its commit) and the data (its hash)."""
+    the code (its commit) and the data (its hash), and the edge its power is judged at."""
     return {"name": name, "config": config, "max_hold": strategy.max_hold,
-            "window": list(window)}
+            "min_edge": strategy.min_edge, "window": list(window)}
+
+
+def _same_trial(recorded: dict, strategy: Strategy, name: str, config: dict[str, Any],
+                window: _Window) -> bool:
+    return ledger.canonical(recorded["trial"]) == ledger.canonical(
+        _trial(strategy, name, config, window))
+
+
+def _digest(intents: pd.DataFrame) -> dict:
+    """What identifies a set of intents: how many, and a hash of them all."""
+    rows = intents.sort_values("intent_id").to_json(orient="values", date_format="iso",
+                                                     date_unit="ns")
+    return {"count": len(intents), "sha256": hashlib.sha256(rows.encode()).hexdigest()}
+
+
+def _totals(positions: pd.DataFrame) -> dict:
+    return {"positions": len(positions), "net_pnl": int(positions["pnl"].sum()),
+            "net_pnl_cent_rounded": int(positions["pnl_cent_rounded"].sum())}
 
 
 def _summary(positions: pd.DataFrame, returns: pd.Series, outside_hold: int) -> dict:
-    return {"positions": len(positions), "net_pnl": int(positions["pnl"].sum()),
-            "net_pnl_cent_rounded": int(positions["pnl_cent_rounded"].sum()),
-            "open_at_end": int((positions["status"] != "settled").sum()),
+    return {**_totals(positions), "open_at_end": int((positions["status"] != "settled").sum()),
             "outside_hold": outside_hold, "sharpe": float(stats.sharpe(returns.to_numpy()))}
 
 
@@ -162,9 +208,8 @@ def _discovery(strategy: Strategy) -> tuple[pd.DataFrame, list[dict]]:
     configs = strategy.configs()
     if (set(latest) != set(configs) or len({(t["data_hash"], t["commit"])
                                             for t in latest.values()}) != 1
-            or any(ledger.canonical(latest[n]["trial"])
-                   != ledger.canonical(_trial(strategy, n, c, window))
-                   for n, c in configs.items())):
+            or not all(_same_trial(latest[n], strategy, n, c, window)
+                       for n, c in configs.items())):
         raise RuntimeError(f"{strategy.family}: the latest discovery trials aren't one run "
                            "of the configurations as defined now; run discover")
     trials = [latest[n] for n in configs]
@@ -189,6 +234,7 @@ class _Plan(NamedTuple):
     discovery: pd.DataFrame  # days × configurations of discovery returns
     trials: list[dict]  # the discovery trials they come from
     selected: str  # the configuration discovery selected
+    intents: dict  # its confirmation intents' `_digest`
     fills: pd.DataFrame  # its confirmation fills
     outside_hold: int  # intents the holding rule dropped from those
     dependence: pd.DataFrame  # the dependence sample's fills
@@ -198,8 +244,11 @@ def _plan(strategy: Strategy, loader: Loader) -> _Plan:
     discovery, trials = _discovery(strategy)
     selected = gauntlet.select(discovery)
     _, (start, end) = _windows(strategy.family)
-    conf, outside = _fills(strategy, loader, strategy.configs()[selected], start, end)
-    return _Plan(discovery, trials, selected, conf, outside, _dependence_fills(strategy, loader))
+    config = strategy.configs()[selected]
+    intents, outside = _intents(strategy, loader, config, start, end)
+    return _Plan(discovery, trials, selected, _digest(intents),
+                 _fill(loader, intents, config, start, end), outside,
+                 _dependence_fills(strategy, loader))
 
 
 def fetch_candles(strategy: Strategy, loader: Loader, workers: int = 2,
@@ -220,11 +269,12 @@ def fetch_candles(strategy: Strategy, loader: Loader, workers: int = 2,
     return written
 
 
-def _null_positions(positions: pd.DataFrame, q: pd.DataFrame) -> tuple[gauntlet.Positions, int]:
+def _null_positions(positions: pd.DataFrame, q: pd.DataFrame, day: str = "close_time"
+                    ) -> tuple[gauntlet.Positions, int]:
     """The positions the null can price (`q`: their `quotes.mids`), as
-    `gauntlet.Positions`, and how many it can't: an exclusive event lacking a member's
-    quote, or a contract lacking its own. A position open at its window's end counts as
-    lost; a scalar settlement, as the share of $1 it paid."""
+    `gauntlet.Positions` dated by `day`, and how many it can't: an exclusive event lacking
+    a member's quote, or a contract lacking its own. A position open at its window's end
+    counts as lost; a scalar settlement, as the share of $1 it paid."""
     quoted = q["mid"].notna()
     whole = quoted.groupby([q["event"], q["decision_time"]]).transform("all")
     priced = null.inputs(q[np.where(q["mutually_exclusive"], whole, quoted)],
@@ -233,8 +283,16 @@ def _null_positions(positions: pd.DataFrame, q: pd.DataFrame) -> tuple[gauntlet.
                            on=["ticker", "decision_time"])
     rows = rows.assign(paid=rows["cost"] + rows["entry_fee"],
                        won=rows["payoff"] / (rows["fill_count"] * PRICE_SCALE),
-                       day=(settle.close_day(rows["close_time"]) - _EPOCH).dt.days.astype("int64"))
+                       day=(settle.close_day(rows[day]) - _EPOCH).dt.days.astype("int64"))
     return gauntlet.Positions.from_frame(rows), len(positions) - len(rows)
+
+
+def _by_last_decision(positions: gauntlet.Positions) -> gauntlet.Positions:
+    """`positions` dated by their decisions, redated by the last decision in each one's
+    cluster: never after the cluster's last settlement, so power's stand-in for when
+    each settles (no outcome read)."""
+    day = pd.Series(positions.day).groupby(positions.cluster).transform("max").to_numpy()
+    return replace(positions, day=day)
 
 
 def _seed(family: str) -> int:
@@ -262,18 +320,93 @@ def confirm(strategy: Strategy, loader: Loader) -> gauntlet.Verdict:
     gauntlet.evaluate(plan.discovery, dependence,  # on no outcome: it fails here, if at all
                       settle.daily_returns(dry, start, end), _null_positions(dry, conf_quotes)[0],
                       np.random.default_rng(0), replace(gauntlet.PREREGISTERED, draws=100))
+    seed, gates = _seed(family), gauntlet.PREREGISTERED
+    window_days = np.arange(*((pd.DatetimeIndex([start, end]) - _EPOCH).days))
+    before = _by_last_decision(_null_positions(dry, conf_quotes, "decision_time")[0])
+    power = {"edge": strategy.min_edge, "worlds": gates.power_worlds,
+             "resamples": gates.power_resamples, "power": gauntlet.power(
+                 dependence, before, window_days, strategy.min_edge,
+                 np.random.default_rng(seed + 1), gates)}
+    categories = _markets(loader, plan.fills["ticker"], end, outcomes=False).set_index(
+        "ticker")["category"]
     trial = _trial(strategy, plan.selected, strategy.configs()[plan.selected], window)
     data = loader.fingerprint([(d_start, d_end), window], pd.concat([conf_files, sample_files]))
-    ledger.begin_confirmation(family, trial, data)
+    ledger.begin_confirmation(family, trial, data, {"power": power})
     positions = _settled(loader, plan.fills, end)
     tested, dropped = _null_positions(positions, conf_quotes)
     returns = settle.daily_returns(positions, start, end)
-    seed = _seed(family)
     verdict = gauntlet.evaluate(plan.discovery, dependence, returns, tested,
-                                np.random.default_rng(seed))
+                                np.random.default_rng(seed), gates)
     ledger.record_trial(family, trial, "confirmation", data, returns, {
-        "verdict": asdict(verdict) | {"p_value": verdict.p_value},
+        "verdict": asdict(verdict) | {"p_value": verdict.p_value}, "power": power,
         **_summary(positions, returns, plan.outside_hold), "tested": len(tested.net_pnl),
-        "dropped_from_null": dropped, "seed": seed,
+        "dropped_from_null": dropped, "seed": seed, "intents": plan.intents,
+        "by_category": {c: _totals(g) for c, g in positions.groupby(
+            positions["ticker"].map(categories).fillna("unknown"))},
         "discovery_trials": [t["trial_id"] for t in plan.trials]})
     return verdict
+
+
+def _filled(positions: pd.DataFrame) -> dict:
+    """What one tier filled and made: intents filled, contracts, net PnL (µ$)."""
+    return {"intents": int(positions["intent_id"].nunique()),
+            "contracts": float(positions["fill_count"].sum() / SIZE_SCALE),
+            "net_pnl": int(positions["pnl"].sum())}
+
+
+def report(strategy: Strategy, loader: Loader) -> dict:
+    """Tier 2 on the family's confirmation, after its verdict: the tested
+    configuration's taker intents filled by NautilusTrader and by vectorbt instead
+    (`backtest/replay.py`, `backtest/bars.py`), priced as Tier 1 is (`_priced`), so the
+    gap is the fill model alone. Each tier logs the intents it filled, contracts and net
+    PnL; each engine also the gap between its own PnL and `settle`'s on the same fills,
+    summed over markets in absolute value (0 when the accounting agrees). Refuses unless
+    the configuration and window are the ones tested, and the intents and Tier 1,
+    recomputed now, are the ones the confirmation recorded (so the engines get the
+    intents, fills and prices the verdict used; their earlier prints aren't checked).
+    Appended to the ledger; it never touches the verdict, so it can be run again."""
+    _check(strategy, loader)
+    tested = ledger.confirmation(strategy.family)
+    if tested is None:
+        raise RuntimeError(f"{strategy.family} has no confirmation verdict to report on")
+    name = tested["trial"]["name"]
+    config = strategy.configs().get(name, {})
+    window = _windows(strategy.family)[1]
+    if not _same_trial(tested, strategy, name, config, window):
+        raise RuntimeError(f"{strategy.family}'s {name!r} isn't what its confirmation tested")
+    out = {"confirmation": tested["trial_id"], "configuration": name} | (
+        {"tier2": "makers get a Tier 2 only from recorded order books"} if config.get("maker")
+        else _tiers(strategy, loader, config, tested["summary"], window))
+    ledger.record_report(strategy.family, "confirmation", out)
+    return out
+
+
+def _tiers(strategy: Strategy, loader: Loader, config: dict[str, Any], recorded: dict,
+           window: _Window) -> dict:
+    start, end = window
+    intents, _ = _intents(strategy, loader, config, start, end)
+    tier1 = _settled(loader, _fill(loader, intents, config, start, end), end)
+    totals = _totals(tier1)
+    if _digest(intents) != recorded["intents"] or totals != {k: recorded[k] for k in totals}:
+        raise RuntimeError(f"{strategy.family}'s intents or Tier 1 are no longer what its "
+                           "confirmation recorded: the code or data changed since")
+    schedule = loader.fee_schedule()
+    tiers = {e: {"intents": 0, "contracts": 0.0, "net_pnl": 0, "accounting_gap": 0}
+             for e in ("nautilus", "vectorbt")}
+    for chunk in batched(sorted(set(intents["ticker"])), TIER2_MARKETS, strict=False):
+        markets = _markets(loader, pd.Series(chunk), end)
+        trades = loader.trades(start, end).join(
+            loader.con.from_df(pd.DataFrame({"ticker": chunk})), "ticker").df()
+        series = markets.set_index("ticker")["series_ticker"].get
+        mine = intents[intents["ticker"].isin(chunk)]
+        for engine, fill in (("nautilus", replay.replay), ("vectorbt", bars.bars)):
+            got, own = fill(mine, trades, markets, series, schedule, end, DIRECT_MEMBER)
+            if got.empty:
+                continue
+            priced, tier = _priced(got, markets, schedule, end), tiers[engine]
+            for k, v in _filled(priced).items():
+                tier[k] += v
+            ours = priced[priced["status"] == "settled"].groupby("ticker")["pnl_cent_rounded"]
+            tier["accounting_gap"] += int(own.set_index("ticker")["pnl"].sub(
+                ours.sum(), fill_value=0).abs().sum())
+    return {"tier1": _filled(tier1), "tier2": tiers}

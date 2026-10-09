@@ -133,8 +133,9 @@ def mids(loader: Loader, wanted: pd.DataFrame, as_of: datetime
     """(what `null.inputs` takes for every market the null prices `wanted` (ticker,
     decision_time) from: event, mutually_exclusive, decision_time, ticker, `DRAW_COLUMNS`,
     and mid in price units, NaN where the market had no candle within the lookback; the
-    candle files (ticker, day) read, which a hash of the data must cover). Raises
-    `MissingData` while `needed` lists files."""
+    candle files (ticker, day) read, which a hash of the data must cover). Rows come in
+    one order for one input, so the null's cluster numbers, and its seeded draws, do too.
+    Raises `MissingData` while `needed` lists files."""
     members = _members(loader, wanted, as_of)
     priced, need, files = _search(loader, members)
     if len(need):
@@ -145,4 +146,4 @@ def mids(loader: Loader, wanted: pd.DataFrame, as_of: datetime
     priced["mid"] = ((bid + ask) / 2).where(priced["end_period_ts"].notna())
     out = priced[["event", "mutually_exclusive", "decision_time", "ticker", "mid"]].join(
         _draws(members))
-    return out.reset_index(drop=True), files
+    return out.sort_values(["event", "decision_time", "ticker"]).reset_index(drop=True), files

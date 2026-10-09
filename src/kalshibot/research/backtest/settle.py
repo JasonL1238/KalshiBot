@@ -98,7 +98,8 @@ def settle(fills: pd.DataFrame, markets: pd.DataFrame, series_of: Callable[[str]
 def close_day(ts: pd.Series) -> pd.Series:
     """The UTC day a close counts on: a close at exactly midnight (a mark at a window's
     end) belongs to the day before. Settlement days everywhere (`daily_returns`, the
-    null's `Positions.day`) come from here."""
+    null's `Positions.day`) come from here, and so do the decision days `run.confirm`
+    dates power's positions by."""
     return (ts - pd.Timedelta(1)).dt.floor("D")
 
 

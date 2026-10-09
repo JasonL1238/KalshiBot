@@ -4,7 +4,8 @@ method and the simulations behind it: docs/BACKTESTING.md).
 1. Discovery picks the configuration with the best Sharpe (`select`).
 2. Confirmation tests it once against H0: net edge ≤ 0, with the widened market-
    calibrated null (`null.py`) and the stationary bootstrap of daily returns; the
-   family's p-value is the larger of the two (`Verdict.p_value`).
+   family's p-value is the larger of the two (`Verdict.p_value`). Its `power` at the
+   family's smallest meaningful edge is simulated before any outcome is read.
 3. Holm across the pre-registered families (`decide`).
 
 DSR, PBO, and the effective number of trials are diagnostics of the discovery
@@ -32,6 +33,13 @@ class Gates:
     pbo_blocks: int = 10
     devig: str = "multiplicative"  # how `null.inputs` turns an event's mids into P(YES)
     dependence_days: int = 400  # the dependence estimates use discovery's last decision days
+    power_worlds: int = 1_000  # simulated confirmations behind a power estimate
+    power_resamples: int = 2_000  # bootstrap draws in each
+
+    @property
+    def level(self) -> float:
+        """α/m: Holm's first step, and a forward-confirmed family's whole level."""
+        return self.alpha / self.families
 
 
 PREREGISTERED = Gates()
@@ -62,6 +70,11 @@ class Positions:
                    count=df["fill_count"].to_numpy(), p_yes=df["p_yes"].to_numpy(),
                    lo=df["lo"].to_numpy(), hi=df["hi"].to_numpy(),
                    cluster=df["cluster"].to_numpy(), day=df["day"].to_numpy())
+
+    @property
+    def break_even(self) -> np.ndarray:
+        """The probability of winning at which each position's expected net PnL is 0."""
+        return self.paid / (self.count * PRICE_SCALE)
 
     def check(self) -> None:
         won = np.asarray(self.won, dtype=float)
@@ -127,12 +140,7 @@ def evaluate(discovery: pd.DataFrame, discovery_positions: Positions,
     enough = trials.shape[1] > 1 and len(trials) >= 2 * gates.pbo_blocks
     pbo = stats.pbo(trials, n_blocks=gates.pbo_blocks) if enough else float("nan")
     n_trials = stats.effective_trials(trials)
-    dep = null.dependence(d.won, d.buy_yes, d.count, d.p_yes, d.lo, d.hi, d.cluster, d.day,
-                          d.paid / (d.count * PRICE_SCALE))
-    widen = null.widening(dep, p.buy_yes, p.count, p.p_yes, p.lo, p.hi, p.cluster, p.day,
-                          p.paid / (p.count * PRICE_SCALE))
-    totals = null.simulate_totals(p.lo, p.hi, p.cluster, p.buy_yes, p.count, p.p_yes,
-                                  gates.draws, rng)
+    dep, widen, totals = _null(d, p, rng, gates)
     observed = float(p.net_pnl.sum())
     p_boot = stats.bootstrap_p_value(confirmation_returns.to_numpy(), gates.draws, rng)
     trial_sr_var = float(np.var(stats.sharpe(trials), ddof=1)) if trials.shape[1] > 1 else 0.0
@@ -141,6 +149,69 @@ def evaluate(discovery: pd.DataFrame, discovery_positions: Positions,
                    float(null.p_value(observed, totals * np.sqrt(widen))), p_boot,
                    float(null.p_value(observed, totals)), dep.rho, dep.cross_day, widen,
                    float(dsr), pbo, n_trials)
+
+
+def _null(d: Positions, p: Positions, rng: np.random.Generator, gates: Gates
+          ) -> tuple[null.Dependence, float, np.ndarray]:
+    """The dependence estimated on discovery positions `d`, the widening it implies for
+    confirmation positions `p`, and `p`'s null totals (not yet widened)."""
+    dep = null.dependence(d.won, d.buy_yes, d.count, d.p_yes, d.lo, d.hi, d.cluster, d.day,
+                          d.break_even)
+    widen = null.widening(dep, p.buy_yes, p.count, p.p_yes, p.lo, p.hi, p.cluster, p.day,
+                          p.break_even)
+    return dep, widen, null.simulate_totals(p.lo, p.hi, p.cluster, p.buy_yes, p.count,
+                                            p.p_yes, gates.draws, rng)
+
+
+def _alternative(p: Positions, edge: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(win, lo, hi): each position wins with its break-even probability plus `edge`
+    (price units per contract), its interval resized to that YES probability from the
+    end it is anchored at; a bucket's start moves down if it must, so the marginal stays
+    exact."""
+    win = np.clip(p.break_even + edge / PRICE_SCALE, 0.0, 1.0)
+    q = np.where(p.buy_yes, win, 1 - win)
+    lo = np.where(p.lo == 0, 0.0, np.where(p.hi >= 1, 1 - q, np.minimum(p.lo, 1 - q)))
+    return win, lo, lo + q
+
+
+def power(discovery_positions: Positions, positions: Positions, days: np.ndarray,
+          edge: int, rng: np.random.Generator, gates: Gates = PREREGISTERED) -> float:
+    """The share of `gates.power_worlds` simulated confirmations in which `evaluate`'s two
+    tests both reject at `gates.level` if every position truly won with its break-even
+    probability plus `edge` (price units per contract). `positions` are the
+    confirmation's before any outcome is read (net_pnl and won unused; `day` stands in
+    for when each settles), `days` the window's day numbers.
+
+    Each world draws outcomes with the null's coupling (`_alternative`), then gets the
+    dependence the widening describes, on the alternative's own probabilities: every
+    day's deviation from its expectation is scaled by the square root of that factor, so
+    the world's total varies as the null's model says it would under the alternative;
+    but never by less than the factor's same-day part, since the real bootstrap sees each
+    day's own variance whatever the cross-day estimate (a negative one would otherwise
+    shrink the days and overstate power). The bootstrap uses `gates.power_resamples`
+    draws per world, fewer than the test's: a slightly stricter cutoff, and a little
+    more noise."""
+    d, p = discovery_positions, positions
+    dep, widen, totals = _null(d, p, rng, gates)
+    null_net = totals * np.sqrt(widen)
+    win, lo, hi = _alternative(p, edge)
+    scale = np.sqrt(max(null.widening(dependence, p.buy_yes, p.count, hi - lo, lo, hi,
+                                      p.cluster, p.day, win)
+                        for dependence in (dep, null.Dependence(dep.rho, ()))))
+    stake = p.count * float(PRICE_SCALE)
+    day = np.searchsorted(days, p.day)
+    expected = np.bincount(day, win * stake - p.paid, len(days))
+    rejected, chunk = [], 100  # worlds simulated at once
+    for start in range(0, gates.power_worlds, chunk):
+        yes = null.draw_outcomes(lo, hi, p.cluster, min(chunk, gates.power_worlds - start), rng)
+        net = np.where(p.buy_yes, yes, ~yes) * stake - p.paid
+        daily = np.zeros((len(net), len(days)))
+        np.add.at(daily.T, day, net.T)
+        daily = expected + scale * (daily - expected)
+        p_boot = [stats.bootstrap_p_value(r, gates.power_resamples, rng) for r in daily]
+        rejected.append(np.maximum(null.p_value(daily.sum(axis=1), null_net), p_boot)
+                        <= gates.level)
+    return float(np.concatenate(rejected).mean())
 
 
 def decide(p_values: Mapping[str, float], gates: Gates = PREREGISTERED) -> dict[str, bool]:
@@ -154,7 +225,7 @@ def decide(p_values: Mapping[str, float], gates: Gates = PREREGISTERED) -> dict[
     places = m - len(forward)
     if len(rest) > places:
         raise ValueError(f"{len(rest)} in-calendar families, but only {places} places")
-    out = {n: bool(p <= gates.alpha / m) for n, p in p_values.items() if n in forward}
+    out = {n: bool(p <= gates.level) for n, p in p_values.items() if n in forward}
     adjusted = stats.holm(np.array([p_values[n] for n in rest] + [1.0] * (places - len(rest))))
     return out | {n: bool(a <= gates.alpha * places / m)
                   for n, a in zip(rest, adjusted, strict=False)}
