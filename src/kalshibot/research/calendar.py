@@ -22,15 +22,20 @@ LOCKBOX_START = datetime(2026, 5, 1, tzinfo=UTC)
 FORWARD_START = datetime(2026, 10, 1, tzinfo=UTC)
 
 # S_h: 00:00 UTC the day after the latest data date of any study that informed hypothesis
-# h. Filled in at pre-registration (M3); a hypothesis absent here has S_h = B.
+# h: an analysis of Kalshi market data that the confirmation window holds (venue facts and
+# studies of other venues don't count). Filled in once a study is known to inform h, at
+# the latest at pre-registration (M3); a hypothesis absent here has S_h = B, and a forward
+# one needs no entry unless its study is why it is forward.
 STUDY_END: dict[str, datetime] = {
     "H1": datetime(2026, 3, 12, tzinfo=UTC),  # why H1 is confirmed forward (STRATEGIES H1)
+    "H2": datetime(2026, 3, 12, tzinfo=UTC),  # Bartlett & O'Hara (STRATEGIES H2, H8)
+    "H8": datetime(2026, 3, 12, tzinfo=UTC),
 }
 
 
 # Hypotheses confirmed on a stretch of the forward window instead (rules: docs/ROADMAP.md,
 # Research calendar), and those stretches, each fixed at registration and starting after it.
-FORWARD = frozenset({"H1", "H5"})
+FORWARD = frozenset({"H1", "H5", "H11"})
 FORWARD_TESTS: dict[str, tuple[datetime, datetime]] = {
     "H1": (datetime(2026, 10, 15, tzinfo=UTC), datetime(2027, 2, 15, tzinfo=UTC)),
 }

@@ -48,7 +48,7 @@ Short, free reads and videos, in study order. Total ≈ 5 hours. Links checked 2
 
 ## Later, when you get there
 
-- **Market making (H2):** [Hummingbot's guide to Avellaneda–Stoikov](https://hummingbot.org/blog/guide-to-the-avellaneda--stoikov-strategy/)
+- **Market making (H11):** [Hummingbot's guide to Avellaneda–Stoikov](https://hummingbot.org/blog/guide-to-the-avellaneda--stoikov-strategy/)
 - **Books, if you get hooked:** *Trading and Exchanges* (Larry Harris) for market structure,
   *Superforecasting* (Tetlock) for forecasting judgment, *Fortune's Formula* (Poundstone)
   for the story of Kelly betting.

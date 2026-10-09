@@ -44,8 +44,26 @@ exchange. Whether it makes money is a result to measure, not an assumption.
   - Each confirmation records its power at the family's smallest meaningful edge
     (checked in conformance) and its results by category, and gets a Tier-2 report
     after its verdict.
-  - A path null (block-resampled, sign-randomized increments within a cluster) for
-    families that exit before settlement, measured in conformance first.
+  - Round-trip accounting and a path null for families that exit before settlement,
+    chosen in conformance first (candidates: [BACKTESTING](BACKTESTING.md)).
+  - A recorded-stretch selection window in `calendar.py` and `run.py` for families
+    selected on recordings, with its dependence sample, and size and power checked in
+    conformance for a stretch of its length.
+  - For the fast, maker and lag families ([STRATEGIES](STRATEGIES.md)), in order:
+    - the discovery tape days their explorations used, then those explorations re-run
+      as `research discover` configurations;
+    - keyless capture on an always-on host, until the keyed recorder runs: a
+      REST-snapshot mode of `kalshibot record` for the markets they trade (`GET /markets/orderbooks`, same coverage log), the
+      incentive programs daily, and logs of when external data arrives (ESPN plays, NWS
+      daily summaries and METARs, Coinbase and Kraken trades);
+    - Tier-1 maker fills per print, capped at the sweep, with the null priced at fill
+      time;
+    - external data keyed by when it became available;
+    - latency as a pre-registered parameter: PnL against latency, a negative-latency
+      canary, a time-shift placebo;
+    - after weeks of recorded books, queue-model fills for makers (hftbacktest,
+      NautilusTrader), calibrated on the user's own fills (You, item 7): a Tier 2 for
+      makers, and the verdict tier for touch makers (BACKTESTING step 3).
   - Pre-register H1–H12 (m = 12, category strata), each with its minimum economically
     meaningful edge.
   - Run every confirmation test.
@@ -87,21 +105,33 @@ The windows, their dates, and per-hypothesis confirmation starts are defined in
   invisible. Each window's first maximum holding period is also embargoed, so positions
   carried across a seam never enter its tests.
 - **Forward confirmation.** A hypothesis whose studies leave it too little confirmation
-  window is confirmed on a stretch of the forward window fixed at its registration and
-  starting after it (`calendar.FORWARD_TESTS`; H1, and H5, whose study runs into 2026 and
+  window (counted in decision days left before the lockbox, less the embargoes at its
+  maximum holding period), or whose data exists only from recordings, is confirmed on a stretch of the forward window fixed at its registration and
+  starting after it (`calendar.FORWARD_TESTS`): H1; H5, whose study runs into 2026 and
   whose forward window is entirely on the post-2026-08-14 Weather Company settlement
-  source). It never opens the lockbox. It is decided alone at α/12 once its window has
-  settled, while Holm runs over the other families' places at α·(12 − f)/12, so neither
-  waits for the other (`gauntlet.decide`).
+  source; and H11, whose data (order books) exists only from the recorder's start, so
+  it selects on a recorded stretch that ends before its registration. A forward family
+  never opens the lockbox. It is decided alone at α/12 once its window has settled,
+  while Holm runs over the other families' places at α·(12 − f)/12, so neither waits for
+  the other (`gauntlet.decide`). Which families are forward (`calendar.FORWARD`) is
+  final before Holm runs.
 
 ## You (the user)
 
 1. Create a **read-only** prod API key (scope `read`), put it in `.env`, and start the
-   recorder now (README). Every day without it is forward-window book data lost. Keep
-   any key that can trade (demo) out of `.env`.
+   recorder now (README) on an always-on host, not a laptop (where:
+   [EXECUTION](EXECUTION.md), Hosting). Every day without it is forward-window book data
+   lost, and the market-making families need weeks of it. Keep any key that can trade (demo) out
+   of `.env`.
 2. Add `commit_attribution = ""` to `~/.codex/config.toml` so Codex adds no co-author line.
 3. When M4 asks, run the order round-trip benchmark on demo, and optionally from an AWS
    us-east-2 host.
 4. Decide whether to buy sportsbook odds history (H12).
-5. After M5: demo trading, then a small live stake. Compare live fills and PnL to the
+5. Rule on H8's gate: may sweep counts from forward days before H8's registration (no
+   outcomes) show whether sweeps survived the end of market orders?
+6. Keep H6 ([STRATEGIES](STRATEGIES.md#fast-maker-and-lag-families-scoped-2026-10-09)),
+   or drop it?
+7. Optionally, before M5, place a few tiny orders by hand to calibrate the makers'
+   queue model (M3).
+8. After M5: demo trading, then a small live stake. Compare live fills and PnL to the
    backtest.

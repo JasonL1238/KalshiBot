@@ -4,20 +4,24 @@ Hypotheses, their pre-registrations, and verdicts. Method:
 [BACKTESTING.md](BACKTESTING.md). Venue facts: [RESEARCH.md](RESEARCH.md).
 
 No family has a verdict yet. Verdicts come only from the pre-registered gauntlet (M3).
-The notes below are prior evidence from others. They motivate the hypotheses; they
-don't settle them.
+The notes below are prior evidence, from others and from our own exploration (labelled).
+They motivate the hypotheses; they don't settle them.
 
 ## Prior notes by family
 
-| H | Family | Prior evidence (not ours) |
+| H | Family | Prior evidence |
 |---|--------|---------------------------|
 | H1 | Favorite–longshot bias | Contracts ≤10¢ lose >60% on average, and those above ~70¢ earn small positive returns after fees. This holds in every category but weakened in 2025 ([Bürgi, Deng & Whelan](https://www.karlwhelan.com/Papers/Kalshi.pdf); [VoxEU](https://cepr.org/voxeu/columns/economics-kalshi-prediction-market)) |
-| H2 | Maker premium / market making | Over 72M trades (volume-weighted), takers lose ~1.1% and makers gain ~1.1%. The gap is smallest in finance and largest in world events, and it flipped after professional market makers arrived in late 2024 ([Becker](https://www.jbecker.dev/research/prediction-market-microstructure)). Risks: adverse selection and inventory |
+| H2 | Single-name maker premium, held to settlement | Over 72M trades (volume-weighted), takers lose ~1.1% and makers gain ~1.1%. The gap is smallest in finance and largest in world events, and it flipped after professional market makers arrived in 2024 ([Becker](https://www.jbecker.dev/research/prediction-market-microstructure)). Makers earn ~1.9¢ a contract in single-name markets and ~0.8¢ in broad ones, all of it in markets that settle NO; price impact is mostly permanent at 5 minutes, and a trailing VPIN near 0.9 or above predicts maker losses ([Bartlett & O'Hara](https://law.stanford.edu/publications/adverse-selection-in-prediction-markets-evidence-from-kalshi/), data to 2026-03-11, fees ignored) |
 | H3 | Coherence / ladder arbitrage | Bucket mids can sum above $1 ([RESEARCH §2](RESEARCH.md)). Leg risk and fees decide whether this is exploitable |
-| H4 | Crypto/finance fair value | Pricing a short-dated crypto contract is a digital-option problem on the settlement index. It is latency-sensitive (unsourced, original notes) |
+| H4 | Crypto/finance: taker lag against external prices | A short-dated crypto contract is a digital option on its settlement index ([RESEARCH §1](RESEARCH.md)). Polymarket added taker fees to its 15-minute crypto markets against latency arbitrage ([The Block](https://www.theblock.co/post/384461/polymarket-adds-taker-fees-to-15-minute-crypto-markets-to-fund-liquidity-rebates)) |
 | H5 | Weather | The market beats NBM by ~10% RMSE and an optimal blend of six forecasts by ~3% (7 cities, 7,590 city-days; [Crosier 2026](https://arxiv.org/html/2609.23969)). The edge vanished in Miami. A [pre-registered study](https://github.com/Nemesis-0/weather-prediction-market) found NBM added nothing beyond the 10 AM price |
-| H6 | Economic releases | Fed markets look nearly efficient and employment markets are the least calibrated. There are only ~12 events per year, so power is low (unsourced, original notes) |
+| H6 | Releases → markets still open | Kalshi's own release markets close before the release ([RESEARCH §1](RESEARCH.md)), so any lag is in related markets that stay open, such as Fed-path markets after a jobs report |
 | H7 | Polymarket ↔ Kalshi | Only ~6% of events overlap, rule wording differs, and capital is locked on both venues (unsourced, original notes) |
+| H8 | Deep resting orders that catch sweeps | Thin order flow causes temporary price deviations that pay liquidity providers ([Handa & Schwartz 1996](https://ideas.repec.org/a/bla/jfinan/v51y1996i5p1835-61.html)); against it, the permanent impact in the H2 row |
+| H9 | Decided outcomes, externally triggered | None found; our exploration only (below) |
+| H10 | In-play sports cross-market lag | TV runs ~19 s and streams 48–62 s behind play ([Streaming Media](https://www.streamingmedia.com/Articles/Post/Blog/Why-the-Gap-Between-the-Game-and-Your-Screen-Is-a-Business-Problem-173844.aspx)); professionals have a dedicated sports feed ([RESEARCH §1](RESEARCH.md)) |
+| H11 | Crypto market making on recorded books | Designated market makers quote with fee cuts and higher limits, and the Liquidity Incentive Program pays for two-sided depth ([RESEARCH §1](RESEARCH.md)) |
 | H12 | Sports vs consensus | About 80% of Kalshi volume, dominated by professional firms (SIG, Jump, DRW) (unsourced, original notes) |
 | — | Market accuracy | Kalshi's self-published study reports Brier ≈ 0.01 for $200k+ markets vs ≈ 0.06 for <$10k markets (link pending) |
 
@@ -70,13 +74,16 @@ H1's own choices; everything else is the pipeline's
 Venue and data facts (settlement source, climate day, bucket math, free sources):
 [RESEARCH §2](RESEARCH.md).
 
-- **Possible openings:**
+- **One mechanism: the forecast model** (one per family:
+  [BACKTESTING](BACKTESTING.md) step 5). Possible openings for it:
   - distribution shape and tails (the studies above only tested the mean);
-  - same-day observations (METAR/ASOS rounding quirks);
+  - same-day observations as model features (METAR/ASOS rounding quirks);
   - the first hour after a market opens;
-  - thinner cities;
-  - maker execution where the series' `fee_type` is plain `quadratic` (e.g. KXHIGHNY,
-    [RESEARCH §1](RESEARCH.md)).
+  - thinner cities.
+- **Left out:** trading on observations alone (in our exploration, buckets already
+  ruled out by the afternoon daily summary kept trading for hours, but the pool is
+  tiny), and maker quotes (makers pay nothing on KXHIGHNY, [RESEARCH §1](RESEARCH.md)),
+  which need recorded books to judge.
 - **Model:** predict a distribution, not a point:
   - [EMOS](https://doi.org/10.1175/MWR2904.1) (Normal with learned mean/variance,
     fit by minimizing CRPS);
@@ -94,3 +101,99 @@ Venue and data facts (settlement source, climate day, bucket math, free sources)
   isotonic/Platt on time-blocked holdouts; bucket probabilities must sum to 1.
 - **Data cleaning:** early 2021–22 events had different bucket structures, and some
   events have zero or two YES winners ([RESEARCH §2](RESEARCH.md)).
+
+### Fast, maker and lag families (scoped 2026-10-09)
+
+Families where resting limit orders, trading in and out quickly, or reacting before a
+market catches up might pay, scoped from six research sweeps.
+
+Our own numbers here are **exploratory**: proxies rather than fill simulations, cut many
+ways, with thresholds picked after looking. They decide what to build first; they are
+not evidence. They come from discovery data (before 2025-11-26), with two exposures
+declared at registration: one sweep saw the outcome of the October 2025 payrolls
+release (KXPAYROLLS-25OCT, H6), and September 2026 crypto volumes were read outside the
+loader (H4, H11). Each design but H11's (there are no discovery books) is re-run as
+`research discover` configurations before it is registered, and the rest is disclosed
+then. Scripts and outputs:
+`data/exploration/2026-10-fast-strategies/` (local only).
+
+What these families share:
+- **Competition and speed.** Professional makers have fee cuts and dedicated feeds
+  ([RESEARCH §1](RESEARCH.md)); in our exploration, fast takers reacted 54–146 ms (p10–p25) after BTC spot
+  moves. Our own latency is unmeasured (M4).
+- **The venue changed since discovery** ([RESEARCH §1](RESEARCH.md) and §2), so 2025 evidence may not carry
+  over.
+- **The method's limits:** a touch maker takes its verdict from recorded books and
+  calibrated queue models ([BACKTESTING](BACKTESTING.md) step 3); early exits need
+  round-trip accounting and a path null (the null's scope there); a configuration that
+  buys both sides (possible in H3, H4, H8, H9 and H10) needs the mixed-side conformance
+  world (step 6).
+- **One mechanism per family** (BACKTESTING step 5), so m stays 12.
+- **H2 and H8:** Bartlett & O'Hara inform both, so S_h is 2026-03-12
+  (`calendar.STUDY_END`), likely leaving them to forward tests
+  ([ROADMAP](ROADMAP.md#research-calendar)).
+
+#### H8 deep resting orders that catch sweeps
+- **Mechanism.** Rest limit orders 5–25¢ behind the touch; takers sweeping thin books
+  fill them at prices that revert. Held to settlement.
+- **Exploratory lead.** Maker fills deep in a sweep marked out well at settlement, most
+  of it within a minute. Tier 1 credits less: a through-print never fills the deepest
+  level a sweep reaches, and "deep" was measured from the sweep's first fill, not from
+  the touch when an order would have been placed.
+- **Testable** once Tier 1 fills makers per print ([ROADMAP](ROADMAP.md) M3).
+- **Gate first:** all its evidence predates the end of market orders ([RESEARCH §1](RESEARCH.md)), which may
+  have made sweeps rarer. How to check that is the user's ruling
+  ([ROADMAP](ROADMAP.md#you-the-user)).
+
+#### H9 decided outcomes, externally triggered
+- **Mechanism.** After an external trigger that the result is decided (ESPN end of
+  game, MLB StatsAPI final out, a total already crossed), buy the decided side at 99¢ or
+  less as a taker, held to settlement. The trigger, not the price, separates it from H1.
+- **Exploratory lead.** NFL games kept trading a median ~160 s after the final whistle,
+  with millions of contracts sold into 99¢ bids; prices below 99¢ were gone within
+  ~30 s. Favorites at 97¢ or more did lose late, so "decided" must come from the trigger.
+- **Risks:** ties, stat corrections, reviews; one loss erases ~100 wins.
+- **Before registration:** check the null's clip and widening, and power, in a
+  conformance world at 97–99.9¢.
+- **In-calendar.**
+
+#### H10 in-play sports cross-market lag
+- **Mechanism.** The moneyline reprices first; spreads and totals follow. Trigger on a
+  moneyline print well away from its recent average (Kalshi only) and take stale quotes
+  on the related markets, held to settlement (an early-exit version needs a path null).
+- **Exploratory lead.** Spreads traded with the move in the first ~2 s marked out above
+  the taker fee at one minute, before any exit cost; from 2 to 10 s they lost after
+  fees. Touchdown props lag 10–30 s but need the scorer, from a feed whose delay is
+  unmeasured.
+- **Lower priority:** a small, sub-second pool against firms with official feeds.
+- **In-calendar,** unless a study turns out to inform it.
+
+#### H11 crypto market making on recorded books (forward)
+- **Mechanism.** Two-sided quotes at the touch, with inventory skew, on crypto hourly
+  and 15-minute markets (makers pay no fee there: [RESEARCH §1](RESEARCH.md)), anchored on a fast estimate of the settlement index
+  and requoted on spot moves.
+- **Exploratory lead.** Takers lost ~0.6–0.7¢ to KXBTCD makers over 1–300 s, but makers
+  filled within ~1 s of a spot jump lost 5–8¢: requoting speed decides it.
+- **Needs** the recorded books, queue models (its verdict tier), round-trip accounting,
+  path null and recorded-stretch selection of [ROADMAP](ROADMAP.md) M3; selected on a
+  recorded stretch and confirmed forward ([ROADMAP](ROADMAP.md#research-calendar)).
+- **Left out:** touch quoting in sports, and latency-tolerant quotes
+  (99¢ bids on decided outcomes, 1¢ asks on dead weather buckets), which need the same
+  books.
+
+#### Other families, as now scoped
+- **H2:** NO bids at YES 30–70¢ in single-name markets, resting behind the touch (which
+  Tier 1 judges), pulled when VPIN runs high, held to settlement. Tail quotes are left
+  out: they buy the same favorites as H1.
+- **H3** adds the two team markets of a game summing past $1, and KXBTCD against KXBTC
+  ranges, each as two taker legs. The cross-series pair needs one shared draw per
+  settlement fix (or is judged on leg risk).
+- **H4:** taker lag against external prices (Coinbase and Kraken for BRTI), held to
+  settlement, with latency a pre-registered parameter ([ROADMAP](ROADMAP.md) M3). It
+  likely needs a host near the exchange ([EXECUTION](EXECUTION.md), Hosting).
+  In-calendar: Synth's report (Kalshi 15-minute BTC data to August 2026) is known and
+  not used; if it were, H4 would go forward.
+- **H6:** jobs report → Fed-path markets, measured as an early exit, so it needs a path
+  null. The October 2025 release is excluded from its confirmation, since its outcome
+  was seen. With ~12 releases a year it expects to be Inconclusive; the user rules on
+  keeping it ([ROADMAP](ROADMAP.md#you-the-user)).

@@ -25,7 +25,10 @@ except what M3 fixes per family before its own confirmation test (the last list 
    fetched). Tests are net of the fee rate itself: rounding each fill up to a cent
    depends on order size, which execution chooses, and would dwarf a small edge on the
    one-contract fills a tape-based backtest gives. Every trial also records its PnL with
-   that rounding.
+   that rounding. One exception: trade-throughs can't show fills at the touch (queue
+   position is invisible, Pitfalls), so a family that quotes at the touch (H11) takes
+   its verdict from recorded books instead, filled by queue models calibrated on real
+   fills, and must pass under the most pessimistic of them.
 4. **Tier 2, model uncertainty.** The same taker intents run through two open-source
    engines that fill them their own way (below). `settle.py` prices their fills too, so
    the gap to Tier 1 is the fill model alone, and each engine's own PnL must equal
@@ -35,7 +38,10 @@ except what M3 fixes per family before its own confirmation test (the last list 
    strategies get a Tier 2 only from recorded order books.
 5. **The gauntlet** (`research/validation/gauntlet.py`), once per hypothesis family:
    - discovery picks the configuration with the best Sharpe, all configurations on one
-     zero-filled daily calendar;
+     zero-filled daily calendar (for a family selected on recordings, its recorded
+     stretch stands in for discovery throughout:
+     [ROADMAP](ROADMAP.md#research-calendar)). So a family holds one mechanism: one
+     bundling several would confirm only the steadiest;
    - confirmation tests that configuration once, against H0: net edge ≤ 0. Two tests
      must both reject: the market-calibrated null (outcomes drawn from de-vigged prices,
      one draw per cluster, recentred to zero edge), widened to each position's
@@ -78,8 +84,14 @@ The null covers contracts held to settlement (step 2 keeps only decisions whose
 positions must settle inside their window). A position still open at the window's end
 counts as lost in the null, which can only make the test stricter; a scalar settlement
 counts as the share of $1 it paid. Families whose positions exit early (market making,
-momentum) need a path null, specified and run through conformance before their
-confirmation test.
+quick round trips) take their exit horizon as their maximum holding period, mark what
+inventory is left at the window's end, and need a path null, specified and run through conformance before
+their confirmation test. Candidates: block-resampled, sign-randomized increments
+within a cluster, which assume a symmetry bounded binary prices lack; and random-entry
+or circular-shift permutations, which test timing rather than net edge ≤ 0, so they
+run recentred to zero net edge or alongside the bootstrap. Conformance picks the
+candidate that holds its size in every world, then the most powerful. Such a family's
+power is simulated on round-trip profit, exit costs included.
 
 - **Prices** (`research/quotes.py`): a market's mid at the decision is the midpoint of
   the closing YES bid and ask of its last 1-minute candle ending by then, an empty side
@@ -112,7 +124,8 @@ economically meaningful edge (`Strategy.min_edge`); whether it is confirmed forw
 maximum holding period (which sets both embargoes and which markets count); the taker
 rule's candle leg (the worse of the next 1-minute candle's extreme and the next print,
 or the print alone); the window-end bids that mark open positions (until they're wired
-in, zero); and, where needed, the path null.
+in, zero); where needed, the path null; and, for a touch maker, its queue models and
+their calibration.
 
 ## Fill models
 

@@ -5,7 +5,8 @@ types, and settlement sources all changed in 2026), so treat specifics as "true 
 this date" and re-check the [docs](https://docs.kalshi.com) and
 [changelog](https://docs.kalshi.com/changelog) before relying on them.
 
-Items marked ✅ were verified live against the API from this repo.
+Items marked ✅ were verified live against the API from this repo. Sections added later
+carry their own dates.
 
 ---
 
@@ -99,9 +100,17 @@ API keys, so use it for all execution testing.
   (strings), `time_in_force` (`good_till_canceled` | `immediate_or_cancel` | `fill_or_kill`),
   and `self_trade_prevention_type`. Optional: `post_only`, `reduce_only`, `client_order_id`,
   `expiration_time`.
-- **No market orders**: send an aggressive IOC limit instead.
+- **No market orders** since 2026-02-11 ([changelog](https://docs.kalshi.com/changelog)):
+  send an aggressive IOC limit instead.
 - Amend, decrease, cancel, batch create/cancel, and **order groups** (auto-cancel if fills
-  exceed N contracts in a rolling 15s window, a built-in circuit breaker).
+  exceed N contracts in a rolling 15s window, a built-in circuit breaker). Changing an
+  order's price or raising its size loses its place in the queue; reducing it or changing
+  only its expiry keeps it ([docs](https://docs.kalshi.com/api-reference/orders/amend-order-v2)).
+  `cancel_order_on_pause` pulls resting orders when trading
+  pauses, and `GET /portfolio/orders/queue_positions` reports where they sit
+  ([docs](https://docs.kalshi.com/api-reference/orders/get-queue-positions-for-orders)).
+- Order responses carry the matching engine's `ts_ms`, and WebSocket messages
+  `sending_ts_ms` (since 2026-10-01), so feed and order latency can be measured.
 - [docs: create order v2](https://docs.kalshi.com/api-reference/orders/create-order-v2)
 
 ### Fees
@@ -109,9 +118,47 @@ API keys, so use it for all execution testing.
   shares by `fee_type`, dated regimes) in `kalshibot.kalshi.fee_history`.
 - Read `fee_type` / `fee_multiplier` from `GET /series/{t}`, and upcoming changes from
   `GET /series/fee_changes`. Never hard-code them.
-- ✅ `KXHIGHNY`: `fee_type=quadratic`, multiplier 1, so **makers pay nothing**.
+- ✅ Makers pay on series typed `quadratic_with_maker_fees` and on combos
+  (`quadratic_with_combo_maker_fees`; shares in `fee_history.MAKER_SHARE`): 160 of 14,719
+  series on 2026-10-08, among them sports
+  games, props and futures, economic releases, index yearly ranges, GPU prices and
+  awards. Crypto hourly and 15-minute (KXBTCD, KXBTC15M) and weather (`KXHIGHNY`:
+  `quadratic`, multiplier 1) charge makers nothing. Since discovery, maker fees reached
+  KXWCGAME (2026-06-05) and 30 GPU-price series (2026-09-03); the index taker discount
+  ended 2026-07-03, and KXMLBGAME's multiplier halved on 2026-08-07 (the fee-change log
+  and `fee_history.json`).
 - Check `fee_cost` on real fills, which also tells you the member precision ($0.0001
   direct vs $0.01 FCM).
+
+### Market makers and incentives (2026-10-09)
+- **Liquidity Incentive Program:** $1–$1,000 per market per day for two-sided depth,
+  scored on random one-second snapshots, until 2027-01-01; it excludes affiliates and
+  employees, IBs and FCMs and their customers, and non-US users
+  ([help](https://help.kalshi.com/en/articles/13823851-liquidity-incentive-program)).
+  ✅ Current programs, per market: `GET /incentive_programs` (public).
+- The **Volume Incentive Program** ends no earlier than 2026-10-13
+  ([CFTC filing](https://www.cftc.gov/filings/orgrules/rules09282630083.pdf)); CFTC staff
+  letter [26-23](https://www.cftc.gov/csl/26-23/download) warns exchanges against
+  incentives that guarantee profits.
+- The **Market Maker Program** gives designated firms lower fees and position
+  accountability levels 10× normal; its terms are confidential
+  ([CFTC filing](https://www.cftc.gov/filings/orgrules/rules0603265168.pdf)). SIG has
+  been one since April 2024 (Kalshi's
+  [press release](https://www.businesswire.com/news/home/20240403664852/en/Kalshi-Onboards-Its-First-Dedicated-Institutional-Market-Maker)).
+- **Institutional feeds:** a multicast L1/L2 feed for sports and crypto perps, reported
+  since 2026-08-12
+  ([Finance Magnates](https://www.financemagnates.com/fintech/kalshi-launches-real-time-level-2-data-feed-for-institutional-traders)),
+  likely faster than our WebSocket (no figures published); FIX 5.0SP2 with AWS
+  PrivateLink (Premier tier) or VPC peering (Prime)
+  ([docs](https://docs.kalshi.com/fix/connectivity)). No co-location is documented.
+  Where Kalshi is hosted: [EXECUTION](EXECUTION.md), Hosting.
+
+### Settlement indices (2026-10-09)
+- CF Benchmarks values stream on the WebSocket at about 1 Hz, and at 5 Hz for BTC, ETH,
+  SOL, XRP and DOGE since 2026-09-03
+  ([docs](https://docs.kalshi.com/websockets/cfbenchmarks-value-5hz)).
+- KXBTCD settles on the 60-second simple average of BRTI before the hour, for markets
+  listed from 2025-03-18 (each market's rules say which). KXBTC15M opened 2025-12-10.
 
 ### Rate limits
 Token buckets, with separate read and write buckets. Most calls cost 10 tokens.
@@ -137,6 +184,8 @@ defaults to ≤ 10 req/s.
 - **Developer Agreement:** API use is for your own trading. Don't redistribute Kalshi data
   (keep `data/` out of git, and don't publish raw datasets or a public mirror). Backoff
   required. No spoofing or wash trading.
+- **Release markets close before the release:** CPI and payrolls markets closed at 8:25
+  or 8:29 ET in 2025, ahead of the 8:30 release ✅ (`close_time`).
 - **Eligibility:** 18+, KYC. Position accountability level for temperature contracts is
   $25,000 per strike, far above what you'll trade.
 
