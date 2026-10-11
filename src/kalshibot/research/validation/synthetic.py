@@ -37,6 +37,14 @@ U < q at its day's end (U its event's draw above), so P(YES | its path so far) =
 sweep through `side` is a row, with q after the step's news and before the sweep, and
 the mid, q rounded to a unit. An `Edge` makes a fill on q in [lo, hi) `cents` cheaper
 (`extra`), on the same paths.
+
+Snapshots (`snapshots` = N > 1): each contract is quoted N times over its day, the
+k-th (k = 0, …, N − 1) after k signals of its event's draw, U + σ·ε each (σ = `signal`).
+Its truth then is the probability of its outcome given those signals, U uniform a
+priori: the mass, over the range of U on which it settles YES, of the N(the signals'
+mean, σ²/k) density truncated to [0, 1] (`_posterior`; at k = 0 the prior, q). So every
+truth is a martingale, an exclusive event's sum to 1 at each snapshot, and every contract
+still settles on U. Each snapshot is quoted on its truths as above.
 """
 
 from __future__ import annotations
@@ -138,18 +146,45 @@ def _paths(df: pd.DataFrame, u: np.ndarray, sweeps: float, scale: float, news: f
         yes=u[row] < q[row])  # q is the truth at the day's end now
 
 
+def _posterior(lo: np.ndarray, hi: np.ndarray, mean: np.ndarray, sd: np.ndarray
+               ) -> np.ndarray:
+    """P(lo ≤ U < hi | signals) for U uniform a priori: the N(mean, sd²) density truncated
+    to [0, 1], each mass taken from the tail that keeps its precision."""
+    def mass(a, b):
+        a, b = (a - mean) / sd, (b - mean) / sd
+        return np.where(a > 0, ndtr(-a) - ndtr(-b), ndtr(b) - ndtr(a))
+
+    return mass(lo, hi) / mass(0.0, 1.0)
+
+
+def _snapshots(df: pd.DataFrame, u: np.ndarray, snapshots: int, signal: float,
+               rng: np.random.Generator) -> pd.DataFrame:
+    """Each contract of `df` (event r's draw `u[r]`) at every snapshot, its truth then."""
+    k = np.arange(1, snapshots)
+    signals = u[:, None] + signal * rng.standard_normal((len(u), snapshots - 1))
+    mean = (np.cumsum(signals, axis=1) / k)[df["event_id"].to_numpy()]
+    lo, hi = df["lo"].to_numpy()[:, None], df["hi"].to_numpy()[:, None]
+    q = np.column_stack([hi - lo, _posterior(lo, hi, mean, signal / np.sqrt(k))])
+    out = df.loc[df.index.repeat(snapshots)].reset_index(drop=True)
+    out["snapshot"], out["q"] = np.tile(np.arange(snapshots), len(df)), q.ravel()
+    return out
+
+
 def world(days: int, events_per_day: int, rng: np.random.Generator, quotes: str = "market",
           edge: Edge = NO_EDGE, bucket_share: float = 0.5, half_spread_cents: float = 1.0,
           shock: float = 0.0, persistence: float = 0.0, strike_share: float = 0.0,
           side: str = "no", first_day: int = 0, sweeps: float = 0.0, sweep_scale: float = 0.05,
-          news: float = 0.0) -> pd.DataFrame:
+          news: float = 0.0, snapshots: int = 1, signal: float = 1.0) -> pd.DataFrame:
     """One row per contract, in `null.inputs`' terms (event, ticker, mutually_exclusive,
     position, ladder, below, mid), plus day, q, yes, ask_yes / ask_no (price units). Days
     are numbered from `first_day`. With `sweeps`, one row per sweep through `side` instead
     (`_paths`): the contract's columns, minute, q and mid before the sweep, its bottom in
-    `side`'s price units, the fill's discount `extra` (price units) and yes."""
-    if sweeps and (bucket_share or quotes != "boundary"):
-        raise ValueError("a sweep world is boundary binaries: bucket_share=0, quotes='boundary'")
+    `side`'s price units, the fill's discount `extra` (price units) and yes. With
+    `snapshots` > 1, one row per contract and snapshot (`snapshot`), quoted on its truth
+    then."""
+    if sweeps and (bucket_share or quotes != "boundary" or snapshots > 1):
+        raise ValueError("a sweep world is boundary binaries (bucket_share=0, quotes='boundary'), "
+                         "without snapshots")
     n = days * events_per_day
     size = np.where(rng.random(n) < bucket_share, rng.integers(3, 8, n), 1)
     z = rng.standard_normal(days)
@@ -177,7 +212,8 @@ def world(days: int, events_per_day: int, rng: np.random.Generator, quotes: str 
             "event_id": np.repeat(ids, k), "bucket": np.tile(np.arange(k), len(ids)),
             "mutually_exclusive": np.repeat(exclusive, k),
             "ladder": np.where(np.repeat(ladder, k), "", None),
-            "q": q.ravel(), "yes": ((lo <= u[ids, None]) & (u[ids, None] < hi)).ravel()}))
+            "q": q.ravel(), "lo": lo.ravel(), "hi": hi.ravel(),
+            "yes": ((lo <= u[ids, None]) & (u[ids, None] < hi)).ravel()}))
     df = pd.concat(parts).sort_values(["event_id", "bucket"], ignore_index=True)
     df["day"] = first_day + df["event_id"] // events_per_day
     df["event"] = f"E{first_day}-" + df["event_id"].astype(str)
@@ -185,6 +221,8 @@ def world(days: int, events_per_day: int, rng: np.random.Generator, quotes: str 
     df["position"], df["below"] = df["bucket"], True  # ladders settle YES when U < q: [0, q)
     if sweeps:
         return _paths(df, u, sweeps, sweep_scale, news, side, edge, rng)
+    if snapshots > 1:
+        df = _snapshots(df, u, snapshots, signal, rng)
     q = df["q"].to_numpy()
     p_win = q if side == "yes" else 1 - q
     half = round(half_spread_cents * 100)
@@ -199,4 +237,4 @@ def world(days: int, events_per_day: int, rng: np.random.Generator, quotes: str 
     df["ask_yes"], df["ask_no"] = (ask, other) if side == "yes" else (other, ask)
     df["mid"] = (df["ask_yes"] + PRICE_SCALE - df["ask_no"]) / 2
     return df[["event", "ticker", "mutually_exclusive", "position", "ladder", "below", "mid",
-               "day", "q", "yes", "ask_yes", "ask_no"]]
+               "day", "q", "yes", "ask_yes", "ask_no"] + (["snapshot"] if snapshots > 1 else [])]

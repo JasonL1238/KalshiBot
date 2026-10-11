@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 from scipy.stats import norm
 
+from kalshibot.kalshi.models import PRICE_SCALE
 from kalshibot.research.validation import null
 
 RNG = np.random.default_rng(11)
@@ -194,6 +195,65 @@ def test_ladders_share_a_draw_from_their_end_and_others_get_their_own():
     assert out.loc["A-2", ["lo", "hi"]].tolist() == pytest.approx([0.0, 0.2])  # below X
     assert out.loc["A-1", "cluster"] == out.loc["A-2", "cluster"]
     assert out["cluster"][["A-1", "A-3", "A-X", "A-Y"]].nunique() == 4
+
+
+def loop_devig(quotes, method):
+    """The reference for `null.inputs`' de-vig: p_yes, lo and hi of every exclusive market,
+    one event snapshot at a time in pandas, as `inputs` did before it batched them."""
+    df = quotes.assign(p_yes=(quotes["mid"] / PRICE_SCALE).clip(0.005, 0.995))
+    df["lo"], df["hi"] = 0.0, df["p_yes"]
+    snapshot = ["event", "priced_at"] if "priced_at" in df else ["event"]
+    exclusive = df["mutually_exclusive"].astype(bool)
+    buckets = df[exclusive & df.duplicated(snapshot, keep=False)].sort_values(
+        ["position", "ticker"])
+    for _, event in buckets.groupby(snapshot, sort=False):
+        q = null.devig((event["p_yes"] * PRICE_SCALE).to_numpy(), method)
+        lo, hi = null.bucket_intervals(q)
+        df.loc[event.index, ["p_yes", "lo", "hi"]] = np.column_stack([q, lo, hi])
+    return df.loc[exclusive, ["p_yes", "lo", "hi"]]
+
+
+def random_quotes(rng, events=200, snapshots=4):
+    """Bucket events of 2–12 markets (positions tied at times, prices sometimes summing to
+    1 or less, one member quoted alone at times, a standalone market among them at times, a
+    missing event or snapshot at times), strike ladders and standalone contracts, over
+    several snapshots, rows shuffled."""
+    rows = []
+    for e in range(events):
+        kind = rng.choice(["buckets", "ladder", "single"])
+        k = int(rng.integers(2, 13)) if kind == "buckets" else int(rng.integers(1, 4))
+        position = rng.integers(0, k, k) if rng.random() < 0.3 else np.arange(k)
+        total = rng.uniform(0.3, 1.0) if rng.random() < 0.2 else rng.uniform(1.0, 1.3)
+        for t in range(snapshots):
+            quoted = (rng.integers(k, size=1) == np.arange(k) if rng.random() < 0.15
+                      else rng.random(k) < 0.8)
+            for b in np.flatnonzero(quoted):
+                key = rng.random()
+                rows.append({"event": None if kind == "buckets" and key < 0.03 else f"E{e}",
+                             "ticker": f"E{e}-{b}",
+                             "priced_at": np.nan if kind == "buckets" and key > 0.97 else t,
+                             "mutually_exclusive": kind == "buckets",
+                             "position": float(position[b]),
+                             "ladder": "L" if kind == "ladder" else None,
+                             "below": bool(rng.random() < 0.5),
+                             "mid": round(rng.dirichlet(np.ones(k))[b] * total * 20000) / 2})
+            if kind == "buckets" and rng.random() < 0.1:
+                rows.append({"event": f"E{e}", "ticker": f"E{e}-S", "priced_at": t,
+                             "mutually_exclusive": False, "position": 0.0, "ladder": None,
+                             "below": False, "mid": float(rng.integers(1, 10000))})
+    df = pd.DataFrame(rows)
+    return df.iloc[rng.permutation(len(df))]
+
+
+@pytest.mark.parametrize("method", ["multiplicative", "shin"])
+@pytest.mark.parametrize("seed", range(5))
+def test_inputs_devig_as_one_event_snapshot_at_a_time_exactly(method, seed):
+    quotes = random_quotes(np.random.default_rng(seed))
+    for frame in (quotes, quotes.drop(columns="priced_at"),
+                  quotes[~quotes["mutually_exclusive"]]):  # and no buckets at all
+        out = null.inputs(frame, method)
+        pd.testing.assert_frame_equal(out.loc[out["mutually_exclusive"], ["p_yes", "lo", "hi"]],
+                                      loop_devig(frame, method), check_exact=True)
 
 
 def test_simulated_totals_match_one_big_draw():

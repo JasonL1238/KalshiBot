@@ -79,10 +79,12 @@ def inputs(quotes: pd.DataFrame, method: str) -> pd.DataFrame:
     exclusive = df["mutually_exclusive"].astype(bool)
     buckets = df[exclusive & df.duplicated(snapshot, keep=False)].sort_values(
         ["position", "ticker"])
-    for _, event in buckets.groupby(snapshot, sort=False):
-        q = devig((event["p_yes"] * PRICE_SCALE).to_numpy(), method)
-        lo, hi = bucket_intervals(q)
-        df.loc[event.index, ["p_yes", "lo", "hi"]] = np.column_stack([q, lo, hi])
+    prices = (buckets["p_yes"] * PRICE_SCALE).to_numpy()
+    devigged = buckets[["p_yes", "lo", "hi"]].to_numpy()  # rows without a snapshot stay
+    for rows in buckets.groupby(snapshot, sort=False).indices.values():  # by position
+        q = devig(prices[rows], method)
+        devigged[rows] = np.column_stack([q, *bucket_intervals(q)])
+    df.loc[buckets.index, ["p_yes", "lo", "hi"]] = devigged
     ladder = df["ladder"].notna() & ~exclusive
     above = ladder & ~df["below"].fillna(False).astype(bool)
     df.loc[above, "lo"] = 1 - df.loc[above, "p_yes"]

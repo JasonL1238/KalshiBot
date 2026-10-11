@@ -63,7 +63,8 @@ def test_taker_worlds_draw_as_before():
 
 
 def test_sweep_worlds_are_boundary_binaries():
-    for kwargs in ({"bucket_share": 0.5}, {"bucket_share": 0.0, "quotes": "market"}):
+    for kwargs in ({"bucket_share": 0.5}, {"bucket_share": 0.0, "quotes": "market"},
+                   {"bucket_share": 0.0, "snapshots": 2}):
         with pytest.raises(ValueError):
             synthetic.world(5, 5, RNG, **{"quotes": "boundary", "sweeps": 4, **kwargs})
     df = synthetic.world(5, 5, RNG, quotes="boundary")
@@ -129,3 +130,77 @@ def test_a_maker_edge_only_cuts_fill_prices():
     base, edged = world(), world(edge=synthetic.Edge(0.0, 1.0, 2))
     pd.testing.assert_frame_equal(base.drop(columns="extra"), edged.drop(columns="extra"))
     assert (base["extra"] == 0).all() and (edged["extra"] == 200).all()
+
+
+@pytest.mark.parametrize("mean, sd", [(0.4, 0.3), (0.05, 0.02), (-0.1, 0.05), (1.15, 0.05)])
+def test_a_signal_posterior_is_the_truncated_normals_mass(mean, sd):
+    def density(x):
+        return np.exp(-((x - mean) / sd) ** 2 / 2)
+
+    whole = quad(density, 0, 1, epsabs=0, epsrel=1e-12, points=[min(max(mean, 0), 1)])[0]
+    for lo, hi in ((0.0, 0.3), (0.2, 0.5), (0.7, 1.0)):
+        part = quad(density, lo, hi, epsabs=0, epsrel=1e-12)[0]
+        assert synthetic._posterior(lo, hi, mean, sd) == pytest.approx(part / whole, rel=1e-9,
+                                                                     abs=0)
+
+
+@pytest.mark.parametrize("signals", [0, 3])
+def test_signal_truths_are_martingales(signals):
+    """E[a contract's truth after the next signal] = its truth now, by quadrature over that
+    signal's predictive density (U uniform a priori, then truncated normal)."""
+    sigma, mean, k = 0.5, 0.35, signals
+
+    def belief(x):  # the density of U now
+        return np.exp(-k * (x - mean) ** 2 / (2 * sigma**2)) if k else 1.0
+
+    norm = quad(belief, 0, 1)[0]
+
+    def predictive(s):
+        return quad(lambda x: belief(x) * np.exp(-((s - x) / sigma) ** 2 / 2), 0, 1)[0] / (
+            norm * sigma * np.sqrt(2 * np.pi))
+
+    for lo, hi in ((0.0, 0.3), (0.2, 0.5), (0.6, 1.0)):
+        now = synthetic._posterior(lo, hi, mean, sigma / np.sqrt(k)) if k else hi - lo
+        later = quad(lambda s, lo=lo, hi=hi: predictive(s) * synthetic._posterior(
+            lo, hi, (k * mean + s) / (k + 1), sigma / np.sqrt(k + 1)), -4, 5, limit=200)[0]
+        assert later == pytest.approx(now, abs=1e-8)
+
+
+@pytest.mark.parametrize("shock", [0.0, 0.5])
+def test_snapshot_truths_are_calibrated_and_buckets_sum_to_one(shock):
+    df = synthetic.world(200, 20, np.random.default_rng(12), "boundary", snapshots=15,
+                         signal=0.5, shock=shock, strike_share=0.5)
+    exclusive = df[df["mutually_exclusive"]].groupby(["event", "snapshot"])["q"].sum()
+    assert np.abs(exclusive - 1).max() < 1e-12
+    for first in (True, False):  # the prior, and after signals
+        rows = df[(df["snapshot"] == 0) == first]
+        bins = np.digitize(rows["q"], [0.1, 0.3, 0.6, 0.9])
+        for b in range(5):
+            part = rows[bins == b]
+            assert part["yes"].mean() == pytest.approx(part["q"].mean(), abs=0.03)
+
+
+def test_snapshot_truths_carry_what_they_knew_forward():
+    """For snapshots a before b, a contract's surprises covary as a martingale's,
+    E[(Y − q_a)(Y − q_b)] = E[q_b(1 − q_b)], and two buckets X ≠ Y of an event's as
+    exclusive outcomes', E[(Y_X − q_X,a)(Y_Y − q_Y,b)] = −E[q_X,b·q_Y,b] (within 3
+    standard errors, by event)."""
+    df = synthetic.world(400, 20, np.random.default_rng(17), "boundary", snapshots=15,
+                         signal=0.5, strike_share=0.5)
+    q = df.pivot(index="ticker", columns="snapshot", values="q")
+    first = df[df["snapshot"] == 0].set_index("ticker").loc[q.index]
+    y, event = first["yes"].to_numpy(float), first["event"].to_numpy()
+    ranked = first.reset_index().sort_values(["event", "position"])
+    pair = (ranked["event"].to_numpy()[:-1] == ranked["event"].to_numpy()[1:]) & \
+        ranked["mutually_exclusive"].to_numpy()[1:]
+    x, z = (q.index.get_indexer(ranked["ticker"].to_numpy()[s][pair])
+            for s in (slice(None, -1), slice(1, None)))
+
+    def zero(d, events):  # mean 0 within 3 standard errors, events independent
+        by_event = pd.Series(d).groupby(events).sum()
+        assert abs(d.mean()) <= 3 * by_event.std() * np.sqrt(len(by_event)) / len(d)
+
+    for a, b in ((0, 1), (0, 14), (3, 9), (6, 13)):
+        qa, qb = q[a].to_numpy(), q[b].to_numpy()
+        zero((y - qa) * (y - qb) - qb * (1 - qb), event)
+        zero((y[x] - qa[x]) * (y[z] - qb[z]) + qb[x] * qb[z], event[x])

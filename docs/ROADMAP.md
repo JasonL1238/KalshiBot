@@ -44,9 +44,17 @@ exchange. Whether it makes money is a result to measure, not an assumption.
   - Each confirmation records its power at the family's smallest meaningful edge
     (checked in conformance) and its results by category, and gets a Tier-2 report
     after its verdict.
-  - Before H1's confirmation test: an H1-shaped taker row in conformance (repeated
-    positions on one contract, nested on one draw as a maker's fills are; never measured
-    for takers).
+  - Before H1's confirmation test: H1-shaped taker rows in conformance (repeated
+    positions on one contract, nested or sliding on one draw as the null prices them;
+    never measured for takers): built, measurement pending; the prediction rows' edges
+    set so the gauntlet's power at α/12 is 40–85%, re-set as appended rows if the
+    measurement lands outside. Then H1's coupling R check
+    ([BACKTESTING](BACKTESTING.md), the pre-registration paragraph), its R̄ computed by
+    the runner: `_coupling` moved to `null.py`, looking up only the quotes its strike
+    terms need, contract i at time t_j for each i before j in a cluster (`quotes.needed`
+    and `mids` fetch them; a contract settled by t_j counts 0); buckets need none. A
+    bucket-heavy H1's R̄ may exceed every planned row's R (R̄/R ≈ 1.35–1.4 with
+    buckets), and then a higher-coupling row runs first, as the rule says.
   - Round-trip accounting and a path null for families that exit before settlement,
     chosen in conformance first (candidates: [BACKTESTING](BACKTESTING.md)).
   - A recorded-stretch selection window in `calendar.py` and `run.py` for families
@@ -64,10 +72,7 @@ exchange. Whether it makes money is a result to measure, not an assumption.
       (built), then the maker world in conformance ([BACKTESTING](BACKTESTING.md)
       step 6; built, measurement pending: pilot at scale 0.1 first; P1/P2 edges set so
       the gauntlet's power at α/12 is 40–85%), then, before H2 or H8 registers, each maker
-      family's coupling R on its discovery fills, computed by the runner (`_coupling`
-      moved to `null.py`, its denominator `_clusters`' var_b and its numerator
-      count-weighted, Σ_j n_j(n_j + 2Σ_{i<j} n_i)·B_j(1 − B_j); the closed form and its
-      cross-check test deleted);
+      family's R̄ on its discovery fills, computed by the runner as for H1 (above);
     - external data keyed by when it became available;
     - latency as a pre-registered parameter: PnL against latency, a negative-latency
       canary, a time-shift placebo;

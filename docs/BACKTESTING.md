@@ -88,7 +88,11 @@ except what M3 fixes per family before its own confirmation test (the last list 
    method passes the maker rows. Candidates, each going back through these rows: one
    draw and one interval per contract for a maker's fills; each cluster's null variance
    raised to the exact boundary covariance of its fills; a maker family's dependence
-   surprises centred at its break-evens.
+   surprises centred at its break-evens. An H1-shaped row in which the gauntlet does not
+   hold its size, or in bold in the third table, holds H1's confirmation until a revised
+   method passes those rows: a logged change to H1's registered method, with the user's
+   sign-off. H1's coupling R check (the pre-registration paragraph) holds it too, until it
+   passes.
 
 The null covers contracts held to settlement (step 2 keeps only decisions whose
 positions must settle inside their window). A position still open at the window's end
@@ -136,12 +140,16 @@ maximum holding period (which sets both embargoes and which markets count); the 
 rule's candle leg (the worse of the next 1-minute candle's extreme and the next print,
 or the print alone); the window-end bids that mark open positions (until they're wired
 in, zero); where needed, the path null; and, for a touch maker, its queue models and
-their calibration. A family of resting bids held to settlement also checks its coupling
-R (Conformance, Coupling R), computed by the runner ([ROADMAP](ROADMAP.md#milestones)
-M3): the largest R among its configurations, each on its own discovery fills, must be at
-most some maker row's R (conservative: a row's R is a mean over the configurations its
-worlds selected); a family above every maker row's R needs a row at its R first. It
-trades standalone contracts only, unless a bucket or ladder maker row passes first.
+their calibration. A family of resting bids held to settlement checks its coupling
+(Conformance, Coupling R) against the maker rows, and H1, before its confirmation test,
+against the H1-shaped rows: its largest R̄ among its configurations, each on its own
+discovery positions and computed by the runner ([ROADMAP](ROADMAP.md#milestones) M3),
+must be at most some passing row's R; a family above every row's R needs a row at its R̄
+first. That is conservative where R̄ ≥ R (Coupling R: term by term for one side's
+positions on buckets, exactly for single contracts, and checked in the ladder row for
+strikes), and a row's R is a mean over the configurations its worlds selected. A family
+of resting bids trades standalone contracts only, unless a bucket or ladder maker row
+passes first.
 
 ## Fill models
 
@@ -204,9 +212,10 @@ the reference, and every engine's own PnL is reconciled against it.
 ## Conformance: how the confirmation test was chosen
 
 > Being re-measured for M3's dependence sample (discovery's last 400 days) and its new
-> worlds (a shock from the seam on, and the makers); until then the two tables below are
-> M2's, and the third (`python -m kalshibot.research.validation.conformance power`) is
-> pending. `--only makers:` runs the maker rows alone, seeded as in the full grid.
+> worlds (a shock from the seam on, the makers and the H1-shaped rows); until then the
+> two tables below are M2's, and the third (`python -m
+> kalshibot.research.validation.conformance power`) is pending. `--only makers:` (or
+> `--only H1-shaped`) runs those rows alone, seeded as in the full grid.
 
 `research/validation/conformance.py` runs the whole pipeline (selection, then the
 candidate tests) on synthetic worlds whose truth is known (`synthetic.py`). The family
@@ -240,18 +249,43 @@ is about ten), and the dependence sample is the runner's (above). The worlds:
   interval, nearer the one outcome they share in truth), and gives a contract's fills
   nested intervals on one draw, while in truth each fill covaries with every earlier one
   by its own break-even variance; Coupling R, below, measures the difference. The maker
-  edge rows (the third table) make the same fills a few cents cheaper.
+  edge rows (the third table) make the same fills a few cents cheaper;
+- **H1-shaped:** the taker family deciding again at each of 15 snapshots of a contract's
+  day, as H1 decides once a day for up to 15 days, so it buys a contract again whenever
+  its ask is still past the cutoff. Each truth is a posterior on noisy signals of the
+  event's draw (`synthetic.py`, "Snapshots"), for buckets, binaries and strike ladders
+  alike, quoted at the boundary every time. The null prices each position at its
+  snapshot's mid, so on one draw it nests a binary's or a strike's positions and slides
+  a bucket's interval as its event's de-vigged prices move, while in truth they share
+  one outcome; Coupling R, below, measures the difference. One row takes H1's NO
+  cutoffs; the others the 20¢ cutoff alone, at the half spreads their labels show: with
+  all five, discovery most often selects 3¢ (about half the worlds), whose nearly
+  settled positions vary so little next to the null (its mids carry the half spread)
+  that their coupling barely registers. Two rows of the third table lower every ask, by
+  0.75¢ and, with a lasting shock, by 1¢. Limits: NO longshots only, not H1's YES
+  favorites configurations; a contract's 15 decisions compressed into one synthetic day;
+  and every cutoff decides at the same snapshots, so the pooled dependence sample keeps
+  one position per contract and snapshot, where H1's configurations decide at their own
+  first prints.
 
-Coupling R, for one configuration's fills: the sum over contracts of the variance at the
-boundary (each fill winning with its break-even, given the earlier ones) of a contract's
-summed wins less break-evens (its net PnL per $1), Σ_j (2·rank_j − 1)·B_j(1 − B_j)
-with its fills j ranked by time and B the break-even, over the sum of the null's (its
-nested-interval variance, scaled up to the break-even variances: `null._clusters`'
-var_b), both from prices alone. Above 1 the null understates the variance; below 1 (deep
-bids) it is conservative. It counts repeated fills through its rank weights, so fills
-per contract need no separate check. The run prints each maker row's R below the tables:
-the mean over its worlds of the selected configuration's, in a single-depth row that
-depth's own.
+Coupling R, for one configuration's positions: the sum over the null's clusters of the
+variance at the boundary (each position winning with its break-even, given the earlier
+ones) of a cluster's summed net PnL, over the sum of the null's variance of the same
+(`null._clusters`' var_b: the positions' intervals on the cluster's draw, nested or
+sliding, scaled up to the break-even variances). In the first, positions a before b,
+each signed by its side and count, covary by B_b(1 − B_b) on one contract, B the
+break-even, and on two contracts by the overlap of their intervals at b's time less
+P·P′, their probabilities then (for two buckets of an event, −P·P′). R takes those from
+the world's truths: the coupling a row tests. A family knows only prices, so it uses R̄:
+the null's de-vigged intervals, every two-bucket term counted as 0. For one side's
+positions R̄ ≥ R term by term on buckets (the truth's term, −P·P′, is at most 0), and
+R̄ = R on single contracts; on strikes it isn't guaranteed (a strike bought as a
+longshot may be a favorite when a further one is bought), and the ladder row checks it.
+Above 1 the null understates the variance of what the test sums; below 1 it is
+conservative. Both count repeated positions, so positions per contract need no separate
+check. The run prints each row's R and R̄ where positions repeat, below the tables:
+means over its worlds of the selected configuration's (in a single-configuration row,
+that configuration's own).
 
 A procedure holds its size if, in every world without an edge, it finds one at most
 α + 2 Monte Carlo standard errors of the time, at α = 0.05 and at 0.05/12 (Holm's first

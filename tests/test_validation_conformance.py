@@ -1,6 +1,7 @@
-"""Conformance: fast end-to-end smoke tests and checks of the maker family's fills, and
-reduced runs (slow) showing the gauntlet keeps its size where naive selection doesn't and
-finds a large edge. The full grid is `python -m kalshibot.research.validation.conformance`."""
+"""Conformance: fast end-to-end smoke tests and checks of the maker and H1-shaped worlds
+(their fills and repeated decisions at the boundary, and their coupling R), and reduced
+runs (slow) showing the gauntlet keeps its size where naive selection doesn't and finds a
+large edge. The full grid is `python -m kalshibot.research.validation.conformance`."""
 
 import math
 import warnings
@@ -29,8 +30,8 @@ def makers(days, events_per_day, seed):
 
 
 @pytest.mark.parametrize("kwargs", [{"favorites": True}, conformance.MAKERS,
-                                    conformance.MAKERS_STRESS],
-                         ids=["takers", "makers", "makers under stress"])
+                                    conformance.MAKERS_STRESS, conformance.H1_SHAPED],
+                         ids=["takers", "makers", "makers under stress", "H1-shaped"])
 def test_a_small_world_yields_every_procedures_decision(kwargs):
     """Fast: the grid's machinery runs end to end and reports every procedure."""
     results = [conformance.one_world(np.random.default_rng(i), discovery_days=30,
@@ -42,10 +43,11 @@ def test_a_small_world_yields_every_procedures_decision(kwargs):
         r = conformance.rates(results)
     assert set(conformance.PROCEDURES) <= set(r)
     assert all(0 <= s["power_predicted"] <= 1 for s in results)
-    if "depths" in kwargs:  # at the boundary
-        assert r["edge_per_position"] == 0 and r["coupling"] > 0
-    else:
-        assert math.isnan(r["coupling"])
+    if "depths" in kwargs:  # at the boundary, a contract to a cluster: R̄ = R
+        assert r["edge_per_position"] == 0 and r["coupling"] == r["coupling_bound"] > 0
+    else:  # R and R̄ wherever positions repeat
+        for key in ("coupling", "coupling_bound"):
+            assert (r[key] > 0) if "snapshots" in kwargs else math.isnan(r[key])
 
 
 def test_sweep_fills_are_tier_ones():
@@ -108,10 +110,13 @@ def test_a_maker_worlds_sweeps_reach_its_shallowest_bid_in_both_periods(monkeypa
     assert scales == [min(conformance.MAKERS_STRESS["depths"]) / PRICE_SCALE] * 2
 
 
-def test_maker_depths_are_whole_cents():
-    for depths in ((150,), (0, 100), (-100,)):
+def test_configurations_are_whole_cents_or_distinct_asks():
+    for depths, thresholds in (((150,), None), ((0, 100), None), ((-100,), None),
+                               ((500,), (2000,)), (None, (0,)), (None, (10_000,)),
+                               (None, (600, 600))):
         with pytest.raises(ValueError):
-            conformance._configs("no", False, depths)
+            conformance._configs("no", False, depths, thresholds)
+    assert conformance._configs("no", False, None, (2000,)) == [("no ≤ 2000", "no", 2000)]
 
 
 def test_a_maker_edge_cuts_each_fill_by_its_expected_net():
@@ -147,21 +152,120 @@ def test_maker_configurations_nest_and_the_dependence_sample_counts_each_sweep_o
 
 
 def test_coupling_is_exact_by_hand():
-    def positions(p_yes, break_even):  # one contract's fills, in time order
-        return pd.DataFrame({
-            "p_yes": p_yes, "paid": np.multiply(break_even, PRICE_SCALE * SIZE_SCALE),
-            "fill_count": SIZE_SCALE, "cluster": 0,
-            "priced_at": conformance.BASE + pd.to_timedelta(np.arange(len(p_yes)), unit="min")})
+    def coupling(*rows, buckets=()):
+        """(R, R̄); a row: ticker, cluster (an exclusive event if in `buckets`), hour, the
+        null's lo and hi, the break-even if bought, then optionally the truth (if not
+        hi − lo), the side bought (NO) and contracts (1)."""
+        quotes = pd.DataFrame([row + (None, "no", 1)[len(row) - 6:] for row in rows],
+                              columns=["ticker", "cluster", "hour", "lo", "hi", "be", "q",
+                                       "side", "contracts"])
+        quotes = quotes.assign(
+            event=quotes["cluster"], mutually_exclusive=quotes["cluster"].isin(buckets),
+            position=0.0, fill_count=quotes["contracts"] * SIZE_SCALE, day=0,
+            p_yes=quotes["hi"] - quotes["lo"],
+            q=quotes["q"].astype(float).fillna(quotes["hi"] - quotes["lo"]),
+            paid=quotes["be"] * PRICE_SCALE * quotes["contracts"] * SIZE_SCALE,
+            priced_at=conformance.BASE + pd.to_timedelta(quotes["hour"], unit="h"))
+        return conformance._coupling(quotes.dropna(subset=["be"]), quotes)
 
-    assert conformance._coupling(positions([0.3], [0.3])) == pytest.approx(1)
-    two = positions([0.6, 0.4], [0.5, 0.3])
-    # truth: 1·0.5·0.5 + 3·0.3·0.7; the null: 0.24 + 0.24 + 2·0.4·(1 − 0.6), scaled by the
-    # break-even variances over the null's, (0.25 + 0.24) / 0.48
-    assert conformance._coupling(two) == pytest.approx(0.88 / (0.8 * 0.49 / 0.48))
-    var_b = null._clusters(np.zeros(2, bool), np.full(2, SIZE_SCALE), two["p_yes"].to_numpy(),
-                           np.zeros(2), two["p_yes"].to_numpy(), np.zeros(2, int),
-                           np.zeros(2, int), np.array([0.5, 0.3]))["var_b"].sum()
-    assert 0.88 / conformance._coupling(two) == pytest.approx(var_b / SIZE_SCALE**2)
+    assert coupling(("A", 0, 0, 0.0, 0.3, 0.7)) == pytest.approx((1, 1))
+    # one contract, nested: 1·0.5·0.5 + 3·0.3·0.7 over the null's 0.24 + 0.24 + 2·0.4·0.4,
+    # scaled by the break-even variances over its own, (0.25 + 0.24) / 0.48
+    nested = [("A", 0, 0, 0.0, 0.6, 0.5), ("A", 0, 1, 0.0, 0.4, 0.3)]
+    assert coupling(*nested) == pytest.approx((0.88 / (0.8 * 0.49 / 0.48),) * 2)
+    # one bucket sliding from [0.2, 0.5) to [0.35, 0.55): 0.21 + 3·0.1875 over the null's
+    # 0.21 + 0.16 + 2·(0.15 − 0.3·0.2), scaled by (0.21 + 0.1875) / 0.37
+    sliding = [("B", 1, 0, 0.2, 0.5, 0.7), ("B", 1, 1, 0.35, 0.55, 0.75)]
+    assert coupling(*sliding) == pytest.approx((0.7725 / (0.55 * 0.3975 / 0.37),) * 2)
+    # two buckets of one event, X bought at hour 0 and Y at 1: R 0.21 + 0.24 + 2·(0 −
+    # 0.25·0.4), exclusive at hour 1, R̄ the two buckets' term as 0; the null
+    # 0.45 + 2·(0.05 − 0.3·0.4)
+    buckets = [("X", 2, 0, 0.0, 0.3, 0.7), ("Y", 2, 0, 0.3, 0.7, None),
+               ("X", 2, 1, 0.0, 0.25, None), ("Y", 2, 1, 0.25, 0.65, 0.6)]
+    assert coupling(*buckets, buckets=[2]) == pytest.approx((0.25 / 0.31, 0.45 / 0.31))
+    # two strikes of one ladder, K1 bought at hour 0 and K2 at 1, truths at hour 1 below
+    # the null's: R 0.24 + 0.21 + 2·(0.4 − 0.4·0.6), R̄ the same from prices,
+    # 0.45 + 2·(0.45 − 0.45·0.7), here below R; the null 0.45 + 2·(0.4 − 0.4·0.7)
+    ladder = [("K1", 3, 0, 0.0, 0.4, 0.6), ("K2", 3, 0, 0.0, 0.75, None),
+              ("K1", 3, 1, 0.0, 0.45, None, 0.4), ("K2", 3, 1, 0.0, 0.7, 0.3, 0.6)]
+    assert coupling(*ladder) == pytest.approx((0.77 / 0.69, 0.72 / 0.69))
+    # one contract bought as NO (2 contracts), YES (1), then NO (1), signed −2, +1, −1:
+    # 4·0.24 + 0.25 + 0.21 + 2·(−2·0.25 + 2·0.21 − 0.21) over the null's, nested,
+    # 1.42 + 2·(−2·0.2 + 2·0.18 − 0.15)
+    sides = [("M", 4, 0, 0.0, 0.4, 0.6, None, "no", 2), ("M", 4, 1, 0.0, 0.5, 0.5, None, "yes", 1),
+             ("M", 4, 2, 0.0, 0.3, 0.7, None, "no", 1)]
+    assert coupling(*sides) == pytest.approx((0.84 / 1.04,) * 2)
+    # clusters add
+    null_var = 0.8 * 0.49 / 0.48 + 0.55 * 0.3975 / 0.37 + 0.31 + 0.69
+    assert coupling(*nested, *sliding, *buckets, *ladder, buckets=[2]) == pytest.approx(
+        ((0.88 + 0.7725 + 0.25 + 0.77) / null_var, (0.88 + 0.7725 + 0.45 + 0.72) / null_var))
+
+
+def test_r_bar_bounds_r_world_by_world_in_the_strike_ladder_row():
+    """R̄ ≥ R isn't guaranteed on strikes, so the ladder row's worlds check it, on the
+    confirmation positions `one_world` scores."""
+    settings = next(kwargs for label, _, kwargs in conformance.GRID
+                    if label.startswith("H1-shaped") and "strike ladders" in label)
+    world = {k: v for k, v in settings.items() if k != "thresholds"}
+    config = conformance._configs("no", False, None, settings["thresholds"])[0]
+    for seed in range(3):
+        df = conformance._world(np.random.default_rng(seed), 400, 100, 20, "no", "boundary",
+                                **world)
+        conf = null.inputs(df.assign(priced_at=conformance._priced_at(df)),
+                           "multiplicative").query("day >= 400")
+        r, r_bar = conformance._coupling(conformance._positions(conf, config), conf)
+        assert r_bar >= r > 0
+
+
+def test_romano_wolf_in_chunks_is_one_draw():
+    df = conformance._world(np.random.default_rng(15), 6, 3, 10, "no", "boundary")
+    df = null.inputs(df.assign(priced_at=conformance._priced_at(df)), "multiplicative")
+    conf, configs = df[df["day"] >= 6], conformance._configs("no", True)
+    runs = []
+    for chunk in (7, 60):
+        rng = np.random.default_rng(16)
+        runs.append((conformance._romano_wolf(conf, configs, rng, 60, chunk),
+                     rng.bit_generator.state))
+    assert runs[0] == runs[1]
+
+
+def h1_shaped(**settings):
+    """`conformance.H1_SHAPED`'s world settings, and its thresholds."""
+    world = {**conformance.H1_SHAPED, **settings}
+    return world, world.pop("thresholds")
+
+
+@pytest.mark.parametrize("settings", [{}, {"bucket_share": 0.0}, {"strike_share": 1.0}],
+                         ids=["buckets", "binaries", "strike ladders"])
+def test_h1_shaped_decisions_are_at_the_boundary(settings):
+    """Each threshold's daily decisions win as often as their truths say (within 3
+    standard errors, by event), so their net edge is the ask grid's, under $0.0002."""
+    world, thresholds = h1_shaped(**settings)
+    df = conformance._world(np.random.default_rng(13), 320, 80, 20, "no", "boundary", **world)
+    for config in conformance._configs("no", False, None, thresholds):
+        pos = conformance._positions(df, config)
+        by_event = (pos["pnl"] - pos["expected"]).groupby(pos["event"]).sum()
+        se = by_event.std() * np.sqrt(len(by_event)) / len(pos)
+        assert abs(by_event.sum() / len(pos)) <= 3 * se
+        assert 0 <= pos["expected"].min() and pos["expected"].max() < 200
+
+
+def test_h1_shaped_contracts_are_bought_again_and_buckets_slide():
+    """A contract is bought on many snapshots, each priced on its own, and the null lays a
+    bucket's interval out afresh at each, de-vigging the event's snapshot, so it slides."""
+    df = conformance._world(np.random.default_rng(14), 8, 2, 20, "no", "boundary",
+                            **h1_shaped()[0])
+    df = null.inputs(df.assign(priced_at=conformance._priced_at(df)), "multiplicative")
+    devigged = df[df["mutually_exclusive"]].groupby(["event", "priced_at"])["p_yes"].sum()
+    assert np.abs(devigged - 1).max() < 1e-9
+    truth = conformance._true_intervals(df)  # the truths' own layout tiles the draw too
+    tiled = truth[truth["mutually_exclusive"]].groupby(["event", "priced_at"])["hi"].max()
+    assert np.abs(tiled - 1).max() < 1e-9
+    assert np.abs(truth["hi"] - truth["lo"] - truth["q"]).max() < 1e-12
+    pos = conformance._positions(df, ("", "no", max(conformance.THRESHOLDS)))
+    assert pos.groupby("ticker")["priced_at"].nunique().equals(pos.groupby("ticker").size())
+    assert (pos.groupby("ticker").size() >= 2).mean() > 0.5
+    assert (pos[pos["mutually_exclusive"]].groupby("ticker")["lo"].nunique() > 1).mean() > 0.5
 
 
 def test_only_keeps_each_rows_grid_seed(monkeypatch):
@@ -190,6 +294,14 @@ def test_size_at_the_boundary_null():
 def test_size_at_the_maker_boundary():
     worlds, alpha = 300, 0.05
     r = conformance.rates(conformance.simulate(worlds, seed=103, **conformance.MAKERS), alpha)
+    assert r["gauntlet"] <= alpha + 3 * np.sqrt(alpha * (1 - alpha) / worlds)
+
+
+@pytest.mark.slow
+def test_size_at_the_h1_shaped_boundary():
+    worlds, alpha = 300, 0.05
+    r = conformance.rates(conformance.simulate(worlds, seed=104, **conformance.H1_COUPLED),
+                          alpha)
     assert r["gauntlet"] <= alpha + 3 * np.sqrt(alpha * (1 - alpha) / worlds)
 
 
