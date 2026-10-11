@@ -288,7 +288,11 @@ taker's price over discovery (trades before the calendar's seam, on markets sett
 then): every bin below 20¢ wins less often than its average price, the 0–5¢ bin's gross
 return is below −20%, and every bin from 85¢ up is within ±3%. It was set after a
 preview on Becker's subset of the same period through the M1 loader, which met it (not
-reproducible since the loader moved to the API tape); `pytest -m data` checks it. Pending the discovery-period API tape (backfilling).
+reproducible since the loader moved to the API tape); `pytest -m data` checks it. On the
+discovery API tape (69.3M trades from 2021-06-30 to before 2025-11-26, fetched by
+2026-10-09) it is met: the 0–5¢ bin wins 1.19% of contracts at an average 2.12¢ (−43.9%
+gross), every bin below 20¢ wins less often than its average price, and the bins from
+85¢ return +0.25% to +0.75%.
 
 ## Pitfalls every backtest here must handle
 

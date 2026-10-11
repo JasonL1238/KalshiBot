@@ -33,8 +33,8 @@ exchange. Whether it makes money is a result to measure, not an assumption.
     Romano–Wolf, Holm.
   - Conformance simulations measuring size and power; the gates chosen from them and
     written down before any confirmation test runs.
-  - Positive control: the favorite–longshot pattern on discovery data (criterion set;
-    runs when the discovery-period API tape lands).
+  - Positive control: the favorite–longshot pattern on discovery data (met:
+    [BACKTESTING](BACKTESTING.md#positive-control)).
 - [ ] **M3. Strategy research.**
   - Shared strategy types (`strategies/base.py`).
   - The research runner: refuses to run without the ledger, logs every evaluation
