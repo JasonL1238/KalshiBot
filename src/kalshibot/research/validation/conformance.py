@@ -70,7 +70,7 @@ def _positions(df: pd.DataFrame, config: tuple[str, str, int]) -> pd.DataFrame:
     pos["cost"] = pos["paid"] = synthetic.taker_cost(
         pos["ask_yes" if side == "yes" else "ask_no"].to_numpy())
     pos["pnl"] = np.where(pos["won"], PRICE_SCALE * SIZE_SCALE, 0) - pos["cost"]
-    pos["decision_time"] = pos["fill_time"] = pos["close_time"] = (
+    pos["priced_at"] = pos["fill_time"] = pos["close_time"] = (
         BASE + pd.to_timedelta(pos["day"], unit="D") + pd.Timedelta(hours=12))  # mid-day
     return pos
 
@@ -325,7 +325,7 @@ def prediction_report(scale: float = 1.0) -> str:
     estimate, made as `confirm` makes it with conformance's draws, against how often the
     gauntlet found the edge, both at α/m; again over the worlds whose cross-day estimate
     is negative, where a per-day error would show (`gauntlet.power`). Synthetic positions
-    settle on their decision day, so this doesn't measure the stand-in `confirm` uses for
+    settle on the day they are priced, so this doesn't measure the stand-in `confirm` uses for
     later settlement."""
     rows = [PREDICTION_HEADER, "|---|---|---|---|---|"]
     for label, _, _, results in _rows(PREDICTION_GRID, scale, seed=1000, predict=True):

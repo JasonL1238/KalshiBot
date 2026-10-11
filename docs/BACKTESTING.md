@@ -65,20 +65,24 @@ except what M3 fixes per family before its own confirmation test (the last list 
    deviation scaled up by the dependence the null is widened for, applied to those
    probabilities but never below its same-day part (the real bootstrap sees each day's
    own variance, whatever the cross-day estimate), and both tests run on each simulated
-   world at α/12. Each position stands dated by the last decision in its cluster, which
-   is never after the cluster's last settlement; where settlements bunch more than last
-   decisions do, that spreads the days and overstates power, so a family's registration
-   compares the two datings on discovery, where outcomes may be read. Both legs see only
-   the positions the null prices; the rest (the ledger's `dropped_from_null`) can move
-   the real bootstrap's power either way, by how their edge per unit of risk differs.
-   Like the null, power relies on YES and NO positions offsetting under one ρ, which
-   understates a day's variance when one configuration buys both sides; such a
-   configuration needs a mixed-side world in conformance first. Conformance checks the
-   estimate against the gauntlet's measured power, over all worlds and over those whose
-   cross-day estimate is negative (the third table below). It passes if predicted power
-   never exceeds measured by more than 2 Monte Carlo standard errors of their per-world
-   difference (bold); a bold cell sends `gauntlet.power` back for revision before any
-   confirmation runs.
+   world at α/12. Each position stands dated by the last time its cluster is priced
+   (Prices, below), which is never after the cluster's last settlement; where
+   settlements bunch more than those times do, that spreads the days and overstates
+   power, so a family's registration compares the two datings on discovery, where
+   outcomes may be read. Both legs see only the positions the null prices; the rest
+   (the ledger's `dropped_from_null`) can move the real bootstrap's power either way, by
+   how their edge per unit of risk differs. Like the null, power relies on YES and NO
+   positions offsetting under one ρ, which understates a day's variance when one
+   configuration buys both sides; such a configuration needs a mixed-side world in
+   conformance first. A family of resting bids held to settlement (Tier 1's makers)
+   needs a maker world first too: its fills come after sweeps against its bids and are
+   priced then (Prices, below), a selection no taker world makes, so the null's size and
+   power's estimate are checked on simulated price paths whose bids fill that way.
+   Conformance checks the estimate against the gauntlet's measured power, over all
+   worlds and over those whose cross-day estimate is negative (the third table below).
+   It passes if predicted power never exceeds measured by more than 2 Monte Carlo
+   standard errors of their per-world difference (bold); a bold cell sends
+   `gauntlet.power` back for revision before any confirmation runs.
 
 The null covers contracts held to settlement (step 2 keeps only decisions whose
 positions must settle inside their window). A position still open at the window's end
@@ -93,8 +97,9 @@ run recentred to zero net edge or alongside the bootstrap. Conformance picks the
 candidate that holds its size in every world, then the most powerful. Such a family's
 power is simulated on round-trip profit, exit costs included.
 
-- **Prices** (`research/quotes.py`): a market's mid at the decision is the midpoint of
-  the closing YES bid and ask of its last 1-minute candle ending by then, an empty side
+- **Prices** (`research/quotes.py`): a position is priced at its decision, a maker's at
+  its fill (its bid rests while the market moves). A market's mid then is the midpoint
+  of the closing YES bid and ask of its last 1-minute candle ending by then, an empty side
   at its bound (no bid: 0, no ask: $1), searched for up to 7 days back but not before
   the market was listed. A mutually exclusive event is de-vigged multiplicatively over
   every market listed and still open by then (a closed one shows an emptied book, and
@@ -131,7 +136,7 @@ their calibration.
 
 | | Taker fill | Size | Maker fill |
 |---|---|---|---|
-| Tier 1 (`fills.py`) | next print by a same-side taker after decision + latency and within `max_wait` (default 5 min); it shows the ask | ≤ 10% of that print (`participation`), in whole contracts | strict trade-through; (1 − haircut) × participation of each print through the bid, in whole contracts |
+| Tier 1 (`fills.py`) | next print by a same-side taker after decision + latency and within `max_wait` (default 5 min); it shows the ask | ≤ 10% of that print (`participation`), in whole contracts | strict trade-through; one fill per sweep, of (1 − haircut) × participation of what it traded through the bid, in whole contracts |
 | NautilusTrader (`replay.py`) | the market's last print when the order arrives, however old; a limit fills only within it, the rest canceled | that print's size, the rest one tick worse | not replayed |
 | vectorbt (`bars.py`) | last print at the end of the first 1-minute bar after decision + latency, however old | the whole order | not modeled |
 

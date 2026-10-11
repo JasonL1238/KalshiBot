@@ -57,8 +57,8 @@ exchange. Whether it makes money is a result to measure, not an assumption.
       incentive programs (built: a `backfill reference` table), and logs of when external
       data arrives (ESPN plays, NWS daily summaries and METARs, Coinbase and Kraken
       trades);
-    - Tier-1 maker fills per print, capped at the sweep, with the null priced at fill
-      time;
+    - Tier-1 maker fills per sweep through the bid, with the null priced at fill time
+      (built), then the maker world in conformance ([BACKTESTING](BACKTESTING.md) step 6);
     - external data keyed by when it became available;
     - latency as a pre-registered parameter: PnL against latency, a negative-latency
       canary, a time-shift placebo;

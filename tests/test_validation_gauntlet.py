@@ -150,7 +150,7 @@ def test_the_alternative_keeps_each_true_probability_from_its_anchor():
 
 def test_pooled_counts_each_bet_once():
     a = pd.DataFrame({"ticker": ["X", "X", "Y"], "side": ["no", "yes", "no"],
-                      "decision_time": [1, 1, 1], "fill_count": [100, 100, 100]})
+                      "priced_at": [1, 1, 1], "fill_count": [100, 100, 100]})
     b = a.assign(fill_count=200)  # another configuration, the same bets at another size
     assert len(gauntlet.pooled([a, b])) == 3
 

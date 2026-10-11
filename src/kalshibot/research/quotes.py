@@ -1,12 +1,12 @@
-"""Quotes for the null: the YES mids a position's null price depends on, at its decision
-time.
+"""Quotes for the null: the YES mids a position's null price depends on, at the time it
+is priced (`priced_at`: `research.run._fill`).
 
 The null de-vigs a mutually exclusive event as a whole (`null.inputs`), so it needs every
 market of the event listed by then; any other contract needs only its own price. Prices
 come from 1-minute candles (`Loader.candles`): a market's mid at time t is the midpoint
 of the closing YES bid and ask of its last candle ending at or before t, with an empty
 side at its bound (no bid: 0; no ask: $1). Candle files hold one market's UTC day, so
-that candle is searched for from the decision day back, a day at a time, for at most
+that candle is searched for from the day priced back, a day at a time, for at most
 `LOOKBACK_DAYS` days before it and never before the day the market was listed.
 
 `needed` lists the files the search reads next and that aren't on disk; fetch them and
@@ -28,16 +28,16 @@ from kalshibot.research.load import Loader, MissingData
 LOOKBACK_DAYS = 7
 STRIKE = r"[A-Z]?-?[\d.]+"  # a ticker suffix that is only a strike: T92499.99, B2850
 MEMBER_COLUMNS = ["event", "mutually_exclusive", "strike_type", "floor_strike", "cap_strike",
-                  "decision_time", "ticker"]
+                  "priced_at", "ticker"]
 DRAW_COLUMNS = ["position", "ladder", "below"]
 
 
 def _members(loader: Loader, wanted: pd.DataFrame, as_of: datetime) -> pd.DataFrame:
-    """For each (ticker, decision_time) of `wanted`: every market of the ticker's event
+    """For each (ticker, priced_at) of `wanted`: every market of the ticker's event
     listed before then and not yet closed, if the event is mutually exclusive (a closed
     member shows an emptied book, and it lost), else the ticker alone. Columns
     `MEMBER_COLUMNS` plus created_time."""
-    wanted = wanted[["ticker", "decision_time"]].drop_duplicates()
+    wanted = wanted[["ticker", "priced_at"]].drop_duplicates()
     if wanted.empty:
         return pd.DataFrame(columns=[*MEMBER_COLUMNS, "created_time"])
     listed = loader.markets(as_of).project(
@@ -45,16 +45,16 @@ def _members(loader: Loader, wanted: pd.DataFrame, as_of: datetime) -> pd.DataFr
         "mutually_exclusive, strike_type, floor_strike, cap_strike, created_time, close_time")
     own = listed.join(loader.con.from_df(wanted[["ticker"]].drop_duplicates()), "ticker").df()
     pairs = wanted.merge(own, on="ticker")
-    exclusive = pairs[pairs["mutually_exclusive"]][["event", "decision_time"]].drop_duplicates()
+    exclusive = pairs[pairs["mutually_exclusive"]][["event", "priced_at"]].drop_duplicates()
     events = exclusive[["event"]].drop_duplicates()
     others = (listed.join(loader.con.from_df(events), "event").df() if len(events)
               else own.iloc[:0])
     every = exclusive.merge(others, on="event")
-    every = every[(every["created_time"] < every["decision_time"])
-                  & ~(every["close_time"] <= every["decision_time"])]
+    every = every[(every["created_time"] < every["priced_at"])
+                  & ~(every["close_time"] <= every["priced_at"])]
     out = pd.concat([pairs[~pairs["mutually_exclusive"]], every], ignore_index=True)
     return out[[*MEMBER_COLUMNS, "created_time"]].astype(
-        {"decision_time": "datetime64[ns, UTC]", "mutually_exclusive": bool})
+        {"priced_at": "datetime64[ns, UTC]", "mutually_exclusive": bool})
 
 
 def _draws(members: pd.DataFrame) -> pd.DataFrame:
@@ -89,7 +89,7 @@ def _search(loader: Loader, members: pd.DataFrame
     """(members with their last candle's end_period_ts, yes_bid_close and yes_ask_close,
     NaN where the search found none; the (ticker, day) files it still needs; the files
     it read)."""
-    day = members["decision_time"].dt.floor("D")
+    day = members["priced_at"].dt.floor("D")
     listed = pd.to_datetime(members["created_time"], utc=True).dt.floor("D")
     oldest = day - timedelta(days=LOOKBACK_DAYS)
     pending = members.assign(day=day, floor=listed.where(listed > oldest, oldest))
@@ -104,9 +104,9 @@ def _search(loader: Loader, members: pd.DataFrame
         candles["end_period_ts"] = candles["end_period_ts"].astype("datetime64[ns, UTC]")
         candles["day"] = close_day(candles["end_period_ts"])  # the file it is in
         last = pd.merge_asof(
-            here.reset_index().sort_values("decision_time"),
+            here.reset_index().sort_values("priced_at"),
             candles[["ticker", "day", "end_period_ts", "yes_bid_close", "yes_ask_close"]]
-            .sort_values("end_period_ts"), left_on="decision_time", right_on="end_period_ts",
+            .sort_values("end_period_ts"), left_on="priced_at", right_on="end_period_ts",
             by=["ticker", "day"], direction="backward").set_index("index")
         hit = last["end_period_ts"].notna()
         found.append(last[hit])
@@ -124,14 +124,14 @@ def _search(loader: Loader, members: pd.DataFrame
 
 def needed(loader: Loader, wanted: pd.DataFrame, as_of: datetime) -> pd.DataFrame:
     """The candle files (ticker, day) `mids` reads next for `wanted` (ticker,
-    decision_time) and that aren't on disk."""
+    priced_at) and that aren't on disk."""
     return _search(loader, _members(loader, wanted, as_of))[1].reset_index(drop=True)
 
 
 def mids(loader: Loader, wanted: pd.DataFrame, as_of: datetime
          ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """(what `null.inputs` takes for every market the null prices `wanted` (ticker,
-    decision_time) from: event, mutually_exclusive, decision_time, ticker, `DRAW_COLUMNS`,
+    priced_at) from: event, mutually_exclusive, priced_at, ticker, `DRAW_COLUMNS`,
     and mid in price units, NaN where the market had no candle within the lookback; the
     candle files (ticker, day) read, which a hash of the data must cover). Rows come in
     one order for one input, so the null's cluster numbers, and its seeded draws, do too.
@@ -144,6 +144,6 @@ def mids(loader: Loader, wanted: pd.DataFrame, as_of: datetime
     bid = priced["yes_bid_close"].astype(float).fillna(0)
     ask = priced["yes_ask_close"].astype(float).fillna(PRICE_SCALE)
     priced["mid"] = ((bid + ask) / 2).where(priced["end_period_ts"].notna())
-    out = priced[["event", "mutually_exclusive", "decision_time", "ticker", "mid"]].join(
+    out = priced[["event", "mutually_exclusive", "priced_at", "ticker", "mid"]].join(
         _draws(members))
-    return out.sort_values(["event", "decision_time", "ticker"]).reset_index(drop=True), files
+    return out.sort_values(["event", "priced_at", "ticker"]).reset_index(drop=True), files

@@ -10,9 +10,10 @@ prints, conservatively:
   print can't fill it, because the latency puts the fill strictly later.
 - Maker (`maker_fills`): a resting bid fills only when later prints trade *through* its
   price, strictly below it for the contract bought. Being at the touch isn't enough,
-  because queue position is unknown. Each through-print contributes
-  `(1 − queue_haircut) × participation` of its size until the order is full or
-  `horizon` expires.
+  because queue position is unknown. Each sweep (one instant's prints by takers selling
+  that contract) fills `(1 − queue_haircut) × participation` of what it traded through
+  the bid, at the bid and the sweep's time, until the order is full or `horizon`
+  expires.
 - Fills are whole contracts, rounded down: Kalshi traded whole contracts only until
   March 2026, and fractions since only where a market enables them.
 
@@ -73,14 +74,13 @@ def maker_fills(con: duckdb.DuckDBPyConnection, intents: str, trades: str,
                 horizon: timedelta, latency: timedelta = timedelta(seconds=1),
                 queue_haircut: float = 0.5, participation: float = 0.1) -> duckdb.DuckDBPyRelation:
     """Resting bids at `limit` for the contract `side`, live from decision_time + latency
-    for `horizon`. Partial fills are reported with the time the order stopped filling."""
+    for `horizon`: one fill per sweep through the bid."""
     share = (1 - queue_haircut) * participation
     return con.sql(f"""
-        WITH i AS (SELECT * FROM {intents} WHERE "limit" IS NOT NULL),
-             through AS (
+        WITH sweeps AS (
                 SELECT i.intent_id, i.ticker, i.side, i.count, i."limit", t.created_time,
-                       floor(t.count * {share}) AS available
-                FROM i JOIN {trades} t
+                       {_whole(f"sum(t.count) * {share}")} AS available
+                FROM {intents} i JOIN {trades} t
                   ON t.ticker = i.ticker
                  AND t.created_time > i.decision_time + INTERVAL '{latency.total_seconds()} seconds'
                  AND t.created_time <= i.decision_time
@@ -88,15 +88,14 @@ def maker_fills(con: duckdb.DuckDBPyConnection, intents: str, trades: str,
                  -- the opposite taker sold our contract below our bid
                  AND ((i.side = 'yes' AND t.taker_side = 'no' AND t.yes_price < i."limit")
                    OR (i.side = 'no' AND t.taker_side = 'yes'
-                       AND {PRICE_SCALE} - t.yes_price < i."limit"))),
-             cum AS (
-                SELECT *, sum(available) OVER (PARTITION BY intent_id ORDER BY created_time
-                          ROWS UNBOUNDED PRECEDING) AS filled FROM through)
-        SELECT intent_id, ticker, side,
-               min(created_time) FILTER (WHERE filled >= count) AS done_time,
-               max(created_time) AS last_time, any_value("limit") AS fill_price,
-               {_whole("least(any_value(count), max(filled))")} AS fill_count, TRUE AS maker
-        FROM cum GROUP BY intent_id, ticker, side
-        HAVING {_whole("least(any_value(count), max(filled))")} > 0""").project(
-        "intent_id, ticker, side, coalesce(done_time, last_time) AS fill_time, fill_price, "
-        "fill_count, maker")
+                       AND {PRICE_SCALE} - t.yes_price < i."limit"))
+                GROUP BY ALL),
+             filled AS (
+                SELECT *, least({_whole("count")}, sum(available) OVER (
+                              PARTITION BY intent_id ORDER BY created_time
+                              ROWS UNBOUNDED PRECEDING))::BIGINT AS so_far FROM sweeps)
+        SELECT intent_id, ticker, side, created_time AS fill_time, "limit" AS fill_price,
+               so_far - coalesce(lag(so_far) OVER (PARTITION BY intent_id ORDER BY created_time),
+                                 0) AS fill_count, TRUE AS maker
+        FROM filled
+        QUALIFY fill_count > 0""")

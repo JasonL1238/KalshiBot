@@ -127,7 +127,7 @@ What these families share:
   calibrated queue models ([BACKTESTING](BACKTESTING.md) step 3); early exits need
   round-trip accounting and a path null (the null's scope there); a configuration that
   buys both sides (possible in H3, H4, H8, H9 and H10) needs the mixed-side conformance
-  world (step 6).
+  world, and a maker family (H2, H8) the maker world (step 6).
 - **One mechanism per family** (BACKTESTING step 5), so m stays 12.
 - **H2 and H8:** Bartlett & O'Hara inform both, so S_h is 2026-03-12
   (`calendar.STUDY_END`), likely leaving them to forward tests
@@ -135,12 +135,14 @@ What these families share:
 
 #### H8 deep resting orders that catch sweeps
 - **Mechanism.** Rest limit orders 5–25¢ behind the touch; takers sweeping thin books
-  fill them at prices that revert. Held to settlement.
+  fill them at prices that revert. Held to settlement. A configuration rests at most one
+  bid per contract at a time (`strategies.base`), so a ladder of depths on one contract
+  is split across configurations.
 - **Exploratory lead.** Maker fills deep in a sweep marked out well at settlement, most
   of it within a minute. Tier 1 credits less: a through-print never fills the deepest
   level a sweep reaches, and "deep" was measured from the sweep's first fill, not from
   the touch when an order would have been placed.
-- **Testable** once Tier 1 fills makers per print ([ROADMAP](ROADMAP.md) M3).
+- **Testable** once its conformance worlds have run (the method's limits, above).
 - **Gate first:** all its evidence predates the end of market orders ([RESEARCH §1](RESEARCH.md)), which may
   have made sweeps rarer. How to check that is the user's ruling
   ([ROADMAP](ROADMAP.md#you-the-user)).

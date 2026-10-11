@@ -11,13 +11,13 @@ from kalshibot.research.load import MissingData
 
 T = lambda s: pd.Timestamp(s, tz="UTC")  # noqa: E731
 AS_OF = datetime(2025, 12, 2, tzinfo=UTC)
-WANTED = pd.DataFrame({"ticker": ["A", "B"], "decision_time": [T("2025-10-10 12:00")] * 2})
+WANTED = pd.DataFrame({"ticker": ["A", "B"], "priced_at": [T("2025-10-10 12:00")] * 2})
 
 
 @pytest.fixture
 def listed(loader):
     """The conftest markets plus two buckets of A's exclusive event EA: A2, untraded, and
-    A3, which closed (and lost) before the decisions."""
+    A3, which closed (and lost) before WANTED is priced."""
     path = loader.kalshi_dir / "markets.parquet"
     rows = pq.read_table(path).to_pylist()
     rows.append({**rows[0], "ticker": "A2", "created_time": T("2025-02-01")})

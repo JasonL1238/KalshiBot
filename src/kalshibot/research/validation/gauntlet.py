@@ -55,7 +55,7 @@ class Positions:
     won: np.ndarray  # share of $1 per contract paid at settlement: 0 or 1 unless scalar
     buy_yes: np.ndarray  # True: holds YES
     count: np.ndarray  # size units
-    p_yes: np.ndarray  # null P(YES) at decision time (`null.inputs`)
+    p_yes: np.ndarray  # null P(YES) when it is priced (`null.inputs`)
     lo: np.ndarray  # null outcome interval on the cluster's uniform draw
     hi: np.ndarray
     cluster: np.ndarray  # integer cluster ids (`null.inputs`)
@@ -89,9 +89,9 @@ class Positions:
 
 def pooled(positions: list[pd.DataFrame]) -> pd.DataFrame:
     """Every configuration's positions for the dependence estimates, each bet once: one
-    per contract, side and decision time."""
+    per contract, side and `priced_at` (`research.run._fill`)."""
     return pd.concat(positions, ignore_index=True).drop_duplicates(
-        ["ticker", "side", "decision_time"])
+        ["ticker", "side", "priced_at"])
 
 
 @dataclass(frozen=True)

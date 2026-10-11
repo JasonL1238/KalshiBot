@@ -1,9 +1,10 @@
 """The market-calibrated null: settle every position at random, as if prices were right.
 
-Under H0 the market's de-vigged probability at decision time is the true one (`inputs`).
-Outcomes are drawn jointly per *cluster* (one underlying: a city-day, a BTC hourly fix,
-an economic release). Each cluster gets one uniform draw U, and each contract owns an
-interval [lo, hi) of U's range, so:
+Under H0 the market's de-vigged probability when a position is priced
+(`research.run._fill`) is the true one (`inputs`). Outcomes are drawn jointly per
+*cluster* (one underlying: a city-day, a BTC hourly fix, an economic release). Each
+cluster gets one uniform draw U, and each contract owns an interval [lo, hi) of U's
+range, so:
 
 - mutually exclusive buckets get exactly one winner: consecutive intervals summing to 1;
 - a strike ladder on one underlying ("above X" or "below X" for many X: BTC at 5 pm, one
@@ -60,7 +61,7 @@ def inputs(quotes: pd.DataFrame, method: str) -> pd.DataFrame:
     are exclusive buckets), position (a bucket's place in its event: the strike), ladder
     (the strike ladder within its event the contract belongs to, NaN if none), below
     (a ladder contract is "below X"), mid (the YES mid in price units), and optionally
-    decision_time (several snapshots of one event; default one). P is the mid clipped to
+    priced_at (several snapshots of one event; default one). P is the mid clipped to
     [0.5%, 99.5%], so no interval is empty, except that an exclusive event's markets (two
     or more quoted at one snapshot) are de-vigged together by `method`. Then:
 
@@ -74,7 +75,7 @@ def inputs(quotes: pd.DataFrame, method: str) -> pd.DataFrame:
     df = quotes.copy()
     df["p_yes"] = (df["mid"] / PRICE_SCALE).clip(0.005, 0.995)
     df["lo"], df["hi"] = 0.0, df["p_yes"]
-    snapshot = ["event", "decision_time"] if "decision_time" in df else ["event"]
+    snapshot = ["event", "priced_at"] if "priced_at" in df else ["event"]
     exclusive = df["mutually_exclusive"].astype(bool)
     buckets = df[exclusive & df.duplicated(snapshot, keep=False)].sort_values(
         ["position", "ticker"])
@@ -134,7 +135,7 @@ def recentered_pnl(yes: np.ndarray, buy_yes: np.ndarray, count: np.ndarray,
     are the same in every draw, so compare it with the observed net PnL.
 
     yes: draws × positions outcomes; buy_yes: the position holds YES (else NO); count in
-    size units; p_yes: the null P(YES) of each position's market at decision time."""
+    size units; p_yes: the null P(YES) of each position's market when it is priced."""
     weight = count * float(PRICE_SCALE)
     won = np.where(buy_yes, yes, ~yes)
     expected = np.where(buy_yes, p_yes, 1 - p_yes)

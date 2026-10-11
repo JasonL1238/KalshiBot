@@ -161,7 +161,7 @@ def test_inputs_devig_only_exclusive_events_within_each_snapshot():
         ticker=["L-1", "L-2", "L-3", "B-X", "S-1", "S-2", "M-X", "M-X"],
         mutually_exclusive=[True, True, True, False, False, False, False, False],
         position=[1.0, 2.0, 3.0, 0, 0, 0, 0, 0], ladder=[None] * 4 + [""] * 2 + [None] * 2,
-        below=[False] * 4 + [True] * 2 + [False] * 2, decision_time=[0, 0, 0, 0, 0, 0, 0, 1],
+        below=[False] * 4 + [True] * 2 + [False] * 2, priced_at=[0, 0, 0, 0, 0, 0, 0, 1],
         mid=[6000, 3000, 2000, 2500, 7000, 3000, 3000, 3500]), "multiplicative")
     buckets = out[out.event == "L"]
     assert buckets["p_yes"].sum() == pytest.approx(1) and buckets["cluster"].nunique() == 1
@@ -177,9 +177,9 @@ def test_a_bucket_keeps_its_interval_while_prices_hold():
     # rows arrive in a different order at each snapshot; the layout must not follow them
     out = null.inputs(quotes(
         event="E", mutually_exclusive=True, ticker=["E-B9", "E-B10", "E-B11"] * 2,
-        position=[9.0, 10.0, 11.0] * 2, decision_time=[0, 0, 0, 1, 1, 1],
+        position=[9.0, 10.0, 11.0] * 2, priced_at=[0, 0, 0, 1, 1, 1],
         mid=[5000, 3000, 2000] * 2).iloc[[0, 1, 2, 5, 3, 4]], "multiplicative")
-    out = out.set_index(["decision_time", "ticker"])
+    out = out.set_index(["priced_at", "ticker"])
     assert out.loc[0, ["lo", "hi"]].equals(out.loc[1, ["lo", "hi"]].loc[["E-B9", "E-B10",
                                                                          "E-B11"]])
     assert out.loc[0, "lo"].tolist() == [0.0, 0.5, 0.8]  # by strike, not "B10" < "B9"

@@ -87,6 +87,8 @@ def _intents(strategy: Strategy, loader: Loader, config: dict[str, Any], start: 
                          "unique intent ids")
     intents = intents.astype({"ticker": str, "side": str, "count": "int64", "limit": "float64",
                               "decision_time": "datetime64[ns, UTC]"})
+    if config.get("maker"):
+        _resting(intents, config["horizon"], strategy.family)
     tickers = con.from_df(intents[["ticker"]].drop_duplicates())
     latest = loader.markets(last).project("ticker, latest_expiration_time").join(
         tickers, "ticker").df().set_index("ticker")["latest_expiration_time"]
@@ -96,9 +98,19 @@ def _intents(strategy: Strategy, loader: Loader, config: dict[str, Any], start: 
     return intents[inside & anchored].reset_index(drop=True), int((inside & ~anchored).sum())
 
 
+def _resting(intents: pd.DataFrame, horizon: timedelta, family: str) -> None:
+    """Refuse maker intents Tier 1 can't fill as one trader's: a bid without a limit, or
+    two bids for one contract within `horizon` (each would take its share of the same
+    sweep)."""
+    gaps = intents.sort_values("decision_time").groupby(["ticker", "side"])["decision_time"]
+    if intents["limit"].isna().any() or (gaps.diff() < horizon).any():
+        raise ValueError(f"{family} maker intents need a limit, and at most one bid per "
+                         "contract resting at a time")
+
+
 def _fills(strategy: Strategy, loader: Loader, config: dict[str, Any], start: datetime,
            end: datetime) -> tuple[pd.DataFrame, int]:
-    """Tier-1 fills, with their decision_time, of `_intents`, and how many intents its
+    """Tier-1 fills of `_intents`, as `_fill` gives them, and how many intents its
     holding rule dropped."""
     intents, outside = _intents(strategy, loader, config, start, end)
     return _fill(loader, intents, config, start, end), outside
@@ -106,18 +118,22 @@ def _fills(strategy: Strategy, loader: Loader, config: dict[str, Any], start: da
 
 def _fill(loader: Loader, intents: pd.DataFrame, config: dict[str, Any], start: datetime,
           end: datetime) -> pd.DataFrame:
-    """Tier-1 fills of `intents`, with their decision_time. The fill rules run in the
+    """Tier-1 fills of `intents`, each with the time the null prices it at (`priced_at`):
+    a taker's decision, a maker's fill (BACKTESTING, Prices). The fill rules run in the
     loader's DuckDB, on the tape of the markets traded only."""
     con = loader.con
     con.register("run_intents", intents)
     loader.trades(start, end).join(con.from_df(intents[["ticker"]].drop_duplicates()),
                                    "ticker").create_view("run_trades", replace=True)
     if config.get("maker"):
-        filled = fills.maker_fills(con, "run_intents", "run_trades", horizon=config["horizon"])
+        out = fills.maker_fills(con, "run_intents", "run_trades",
+                                horizon=config["horizon"]).df()
+        priced_at = out["fill_time"]
     else:
-        filled = fills.taker_fills(con, "run_intents", "run_trades")
-    return filled.df().merge(intents[["intent_id", "decision_time"]], on="intent_id"
-                             ).sort_values("intent_id", ignore_index=True)
+        out = fills.taker_fills(con, "run_intents", "run_trades").df()
+        priced_at = out["intent_id"].map(intents.set_index("intent_id")["decision_time"])
+    return out.assign(priced_at=priced_at).sort_values(["intent_id", "fill_time"],
+                                                       ignore_index=True)
 
 
 def _markets(loader: Loader, tickers: pd.Series, end: datetime,
@@ -276,19 +292,19 @@ def _null_positions(positions: pd.DataFrame, q: pd.DataFrame, day: str = "close_
     a member's quote, or a contract lacking its own. A position open at its window's end
     counts as lost; a scalar settlement, as the share of $1 it paid."""
     quoted = q["mid"].notna()
-    whole = quoted.groupby([q["event"], q["decision_time"]]).transform("all")
+    whole = quoted.groupby([q["event"], q["priced_at"]]).transform("all")
     priced = null.inputs(q[np.where(q["mutually_exclusive"], whole, quoted)],
                          gauntlet.PREREGISTERED.devig)
-    rows = positions.merge(priced[["ticker", "decision_time", "p_yes", "lo", "hi", "cluster"]],
-                           on=["ticker", "decision_time"])
+    rows = positions.merge(priced[["ticker", "priced_at", "p_yes", "lo", "hi", "cluster"]],
+                           on=["ticker", "priced_at"])
     rows = rows.assign(paid=rows["cost"] + rows["entry_fee"],
                        won=rows["payoff"] / (rows["fill_count"] * PRICE_SCALE),
                        day=(settle.close_day(rows[day]) - _EPOCH).dt.days.astype("int64"))
     return gauntlet.Positions.from_frame(rows), len(positions) - len(rows)
 
 
-def _by_last_decision(positions: gauntlet.Positions) -> gauntlet.Positions:
-    """`positions` dated by their decisions, redated by the last decision in each one's
+def _by_last_priced(positions: gauntlet.Positions) -> gauntlet.Positions:
+    """`positions` dated by `priced_at`, redated by the last of those in each one's
     cluster: never after the cluster's last settlement, so power's stand-in for when
     each settles (no outcome read)."""
     day = pd.Series(positions.day).groupby(positions.cluster).transform("max").to_numpy()
@@ -322,7 +338,7 @@ def confirm(strategy: Strategy, loader: Loader) -> gauntlet.Verdict:
                       np.random.default_rng(0), replace(gauntlet.PREREGISTERED, draws=100))
     seed, gates = _seed(family), gauntlet.PREREGISTERED
     window_days = np.arange(*((pd.DatetimeIndex([start, end]) - _EPOCH).days))
-    before = _by_last_decision(_null_positions(dry, conf_quotes, "decision_time")[0])
+    before = _by_last_priced(_null_positions(dry, conf_quotes, "priced_at")[0])
     power = {"edge": strategy.min_edge, "worlds": gates.power_worlds,
              "resamples": gates.power_resamples, "power": gauntlet.power(
                  dependence, before, window_days, strategy.min_edge,

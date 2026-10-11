@@ -57,8 +57,23 @@ def test_maker_fills_only_when_trades_go_through_the_bid(con):
                       participation=1.0).df().set_index("intent_id")
     assert list(out.reset_index().columns) == FILL_COLUMNS
     assert out.loc[1, "fill_time"] == S(2) and out.loc[1, "fill_count"] == 100
-    assert out.loc[2, "fill_count"] == 300 and out.loc[2, "fill_time"] == S(5)  # whole
-    assert out.loc[1, "fill_price"] == 4000 and 3 not in out.index
+    # one fill per sweep, of its own share in whole contracts: 1.5 → 1, then 2
+    assert out.loc[[2], ["fill_time", "fill_count"]].values.tolist() == [[S(2), 100], [S(5), 200]]
+    assert (out["fill_price"] == 4000).all() and 3 not in out.index
+
+
+def test_each_sweep_fills_the_whole_contracts_of_its_own_share(con):
+    con.register("sweeps", pd.DataFrame([("T", S(2), 4100, 500, "no"),  # above the bid
+                                         ("T", S(2), 3900, 300, "no"),
+                                         ("T", S(2), 3800, 100, "no"),  # 1.5 + 0.5: 2 in one
+                                         ("T", S(3), 3900, 100, "no"),  # 0.5, and 0.5 again:
+                                         ("T", S(4), 3900, 100, "no")],  # no whole contract
+                                        columns=["ticker", "created_time", "yes_price", "count",
+                                                 "taker_side"]))
+    name = intents(con, [(1, "T", "yes", S(0), 1000, 4000)])
+    out = maker_fills(con, name, "sweeps", horizon=timedelta(seconds=10), queue_haircut=0.5,
+                      participation=1.0).df()
+    assert out[["fill_time", "fill_count"]].values.tolist() == [[S(2), 200]]
 
 
 def test_maker_horizon_cuts_off_later_prints(con):
@@ -132,10 +147,7 @@ def test_fills_before_a_cut_dont_depend_on_later_prints(prints, cut):
         both = pd.concat([taker_fills(c, "intents", name, participation=0.5).df(),
                           maker_fills(c, "intents", name, horizon=timedelta(seconds=30),
                                       participation=0.5).df()])
-        results.append(both[both.fill_time < S(cut)].sort_values(["intent_id", "maker"])
-                       .reset_index(drop=True))
-    # a maker's partial fill reports the time it stopped filling, which a cut can move
-    # earlier; anything complete before the cut is identical
+        results.append(both[both.fill_time < S(cut)].sort_values(
+            ["intent_id", "maker", "fill_time"]).reset_index(drop=True))
     full, cut_ = results
-    done = full[~full.maker | (full.fill_count == 300)]
-    assert done.merge(cut_, how="left", indicator=True)["_merge"].eq("both").all()
+    pd.testing.assert_frame_equal(full, cut_, check_dtype=False)

@@ -41,7 +41,7 @@ class Strategy(Protocol):
         """Every configuration by name, fixed at pre-registration. Keys the backtest
         reads besides the strategy's own: "maker" (True: intents are resting bids;
         default False, takers) and, for makers, "horizon" (a timedelta: how long a bid
-        rests)."""
+        rests; at most one per contract rests at a time)."""
         ...
 
     def intents(self, data: MarketData, start: datetime, end: datetime,

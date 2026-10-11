@@ -4,6 +4,7 @@ longshot bucket the test strategy buys NO on."""
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from functools import partial
 
 import numpy as np
 import pandas as pd
@@ -15,7 +16,7 @@ from typer.testing import CliRunner
 from kalshibot import cli
 from kalshibot.data import backfill as bf
 from kalshibot.research import calendar, ledger, run
-from kalshibot.research.backtest import settle
+from kalshibot.research.backtest import fills, settle
 from kalshibot.research.load import Loader, MissingData
 from kalshibot.research.validation import gauntlet
 from kalshibot.strategies.base import INTENT_COLUMNS
@@ -121,7 +122,15 @@ def market(tmp_path, monkeypatch):
     return Loader(tmp_path, family="HX")
 
 
-def test_discover_fetch_confirm_once(market, monkeypatch):
+@pytest.fixture
+def power_calls(monkeypatch):
+    """The positions each `gauntlet.power` call is given."""
+    seen, power = [], gauntlet.power
+    monkeypatch.setattr(gauntlet, "power", lambda d, p, *a: seen.append(p) or power(d, p, *a))
+    return seen
+
+
+def test_discover_fetch_confirm_once(market, power_calls):
     strategy = BuyNoEachMorning()
     discovery = run.discover(strategy, market)
     assert list(discovery.columns) == ["one", "two"] and len(discovery) == 20
@@ -136,10 +145,8 @@ def test_discover_fetch_confirm_once(market, monkeypatch):
     assert run.fetch_candles(strategy, market, workers=2, make_client=Candles) > 0
     rounds = len({start for _, start in Candles.calls})
     assert rounds > 1 and run.fetch_candles(strategy, market, make_client=Candles) == 0
-    seen, power = [], gauntlet.power
-    monkeypatch.setattr(gauntlet, "power", lambda d, p, *a: seen.append(p) or power(d, p, *a))
     verdict = run.confirm(strategy, market)
-    assert len(set(seen[0].day)) == 18  # power's positions dated by decision, one a day
+    assert len(set(power_calls[0].day)) == 18  # dated when priced (a taker's decision), one a day
     assert 0 < verdict.p_value <= 1 and verdict.config in {"one", "two"}
     done = ledger.trials("HX")[-1]
     assert done["window"] == "confirmation" and done["summary"]["seed"] == run._seed("HX")
@@ -267,11 +274,11 @@ def test_a_crash_settling_or_in_power_happens_before_the_test_starts(market, mon
     assert '"confirmation"' not in ledger_file.read_text()
 
 
-def test_power_dates_each_position_by_its_clusters_last_decision():
+def test_power_dates_each_position_by_its_clusters_last_pricing():
     n = np.zeros(3)
-    decided = gauntlet.Positions(n, n, n, n.astype(bool), n, n, n, n + 1,
-                                 cluster=np.array([0, 0, 1]), day=np.array([3, 5, 4]))
-    assert run._by_last_decision(decided).day.tolist() == [5, 5, 4]
+    priced = gauntlet.Positions(n, n, n, n.astype(bool), n, n, n, n + 1,
+                                cluster=np.array([0, 0, 1]), day=np.array([3, 5, 4]))
+    assert run._by_last_priced(priced).day.tolist() == [5, 5, 4]
 
 
 def test_confirm_needs_discovery_as_configured_now(market):
@@ -296,8 +303,9 @@ def test_confirm_needs_discovery_as_configured_now(market):
 
 def test_decisions_stay_inside_their_window_and_holding_period(market):
     s = BuyNoEachMorning()
-    fills, outside = run._fills(s, market, {"count": 100}, D0, D0 + timedelta(days=10))
-    days = fills["decision_time"].dt.floor("D")
+    filled, outside = run._fills(s, market, {"count": 100}, D0, D0 + timedelta(days=10))
+    days = filled["priced_at"].dt.floor("D")
+    assert (filled["priced_at"].dt.strftime("%H:%M") == "09:59").all()  # a taker's decision
     assert outside == 0
     assert days.min() == pd.Timestamp(D0 + timedelta(days=1))
     assert days.max() == pd.Timestamp(D0 + timedelta(days=8))
@@ -307,8 +315,64 @@ def test_decisions_stay_inside_their_window_and_holding_period(market):
             return pd.DataFrame([(0, "LONG", "no", start + timedelta(hours=1), 100, None)],
                                 columns=INTENT_COLUMNS)
 
-    fills, outside = run._fills(Long(), market, {}, D0, D0 + timedelta(days=10))
-    assert fills.empty and outside == 1
+    filled, outside = run._fills(Long(), market, {}, D0, D0 + timedelta(days=10))
+    assert filled.empty and outside == 1
+
+
+class RestingNo(BuyNoEachMorning):
+    """Bid 95¢ for 2 NO on each day's longshot at 21:59 the evening before it lists,
+    resting 13 hours: the YES buyers at 10¢ at 09:00 and at 10:01 each sell 10 NO
+    through it, one contract apiece at a tenth (`participation`, with no queue haircut)."""
+
+    def configs(self):
+        return {"one": {"count": 200, "maker": True, "horizon": timedelta(hours=13)}}
+
+    def intents(self, data, start, end, config):
+        bids = super().intents(data, start, end, config)
+        return bids.assign(decision_time=bids["decision_time"] - pd.Timedelta(hours=12),
+                           limit=9500)
+
+
+def test_a_makers_fills_are_priced_and_dated_when_they_fill(market, monkeypatch,
+                                                            power_calls):
+    monkeypatch.setattr(fills, "maker_fills", partial(fills.maker_fills, queue_haircut=0.0))
+    strategy, config = RestingNo(), RestingNo().configs()["one"]
+    got, _ = run._fills(strategy, market, config, D0, D0 + timedelta(10))
+    assert (got.groupby("intent_id").size() == 2).all() and (got["fill_count"] == 100).all()
+    assert (got["priced_at"] == got["fill_time"]).all()
+    run.discover(strategy, market)
+    run.fetch_candles(strategy, market, make_client=Candles)
+    run.confirm(strategy, market)
+    done = ledger.trials("HX")[-1]["summary"]
+    # priced at the decision, before the longshot listed, none would be tested, and power
+    # would date each position a day early
+    assert done["tested"] == done["positions"] == 2 * done["intents"]["count"] > 0
+    tested, _ = run._fills(strategy, market, config, *calendar.confirmation_window("HX"))
+    fill_days = (settle.close_day(tested["fill_time"]) - run._EPOCH).dt.days
+    assert set(power_calls[0].day) == set(fill_days)
+
+
+def test_maker_intents_rest_one_bid_per_contract_with_a_limit(market):
+    t = pd.Timestamp("2026-01-05", tz="UTC")
+    bids = pd.DataFrame([(0, "T", "no", t, 100, 9500.0),
+                         (1, "T", "no", t + timedelta(hours=3), 100, 9500.0),
+                         (2, "T", "yes", t + timedelta(hours=1), 100, 500.0)],
+                        columns=INTENT_COLUMNS)
+    run._resting(bids, timedelta(hours=3), "HX")  # back to back, and the other side
+    for bad in (bids.assign(limit=[9500.0, np.nan, 500.0]),
+                bids.assign(decision_time=[t, t + timedelta(hours=2), t])):
+        with pytest.raises(ValueError, match="one bid per contract"):
+            run._resting(bad, timedelta(hours=3), "HX")
+
+    class Twice(RestingNo):  # a second bid on each contract an hour later
+        def intents(self, *args):
+            bids = super().intents(*args)
+            return pd.concat([bids, bids.assign(intent_id=bids["intent_id"] + len(bids),
+                                                decision_time=bids["decision_time"]
+                                                + pd.Timedelta(hours=1))], ignore_index=True)
+
+    with pytest.raises(ValueError, match="one bid per contract"):  # the runner checks
+        run._fills(Twice(), market, Twice().configs()["one"], D0, D0 + timedelta(10))
 
 
 def test_a_configuration_that_never_trades_scores_zero(market):
