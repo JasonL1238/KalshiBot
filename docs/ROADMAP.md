@@ -44,6 +44,9 @@ exchange. Whether it makes money is a result to measure, not an assumption.
   - Each confirmation records its power at the family's smallest meaningful edge
     (checked in conformance) and its results by category, and gets a Tier-2 report
     after its verdict.
+  - Before H1's confirmation test: an H1-shaped taker row in conformance (repeated
+    positions on one contract, nested on one draw as a maker's fills are; never measured
+    for takers).
   - Round-trip accounting and a path null for families that exit before settlement,
     chosen in conformance first (candidates: [BACKTESTING](BACKTESTING.md)).
   - A recorded-stretch selection window in `calendar.py` and `run.py` for families
@@ -58,7 +61,13 @@ exchange. Whether it makes money is a result to measure, not an assumption.
       data arrives (ESPN plays, NWS daily summaries and METARs, Coinbase and Kraken
       trades);
     - Tier-1 maker fills per sweep through the bid, with the null priced at fill time
-      (built), then the maker world in conformance ([BACKTESTING](BACKTESTING.md) step 6);
+      (built), then the maker world in conformance ([BACKTESTING](BACKTESTING.md)
+      step 6; built, measurement pending: pilot at scale 0.1 first; P1/P2 edges set so
+      the gauntlet's power at α/12 is 40–85%), then, before H2 or H8 registers, each maker
+      family's coupling R on its discovery fills, computed by the runner (`_coupling`
+      moved to `null.py`, its denominator `_clusters`' var_b and its numerator
+      count-weighted, Σ_j n_j(n_j + 2Σ_{i<j} n_i)·B_j(1 − B_j); the closed form and its
+      cross-check test deleted);
     - external data keyed by when it became available;
     - latency as a pre-registered parameter: PnL against latency, a negative-latency
       canary, a time-shift placebo;

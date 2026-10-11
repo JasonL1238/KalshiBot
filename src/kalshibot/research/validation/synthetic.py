@@ -22,6 +22,21 @@ Quotes are set for a family that buys `side` (YES or NO) as a taker:
 An `Edge` lowers the `side` ask by `cents` for true probabilities q in [lo, hi); the net
 edge is a little less, because the fee rises as the price falls (conformance reports the
 measured edge). The other side's ask is 1 − (this ask − spread).
+
+Resting bids (`sweeps` > 0, boundary binaries only): each contract's truth q takes
+Poisson(`sweeps`) steps over its day, the k-th in minute k + 1. A step brings news first,
+if `news` = β > 0: up with probability (1 + β(2q − 1))/2, taking q to
+q(1 + β)/(1 + β(2q − 1)), else down to q(1 − β)/(1 − β(2q − 1)) (Bayes' rule). Then, if
+s ≤ q ≤ 1 − s (s = `sweep_scale`), a sweep sells YES or NO, by a fair coin, from its
+price p down to x = max(p − s·V^(−NOISE), 0), V uniform: P(p − x > t) = (s/t)² for
+s ≤ t < p, and an atom (s/p)² at x = 0, the book emptied. A NOISE share of the sweeps
+that leave a book are noise, and the price returns to p; after the rest it stays at x.
+So a bid b ≤ p − s that a sweep trades through is worth exactly b afterwards on
+average, and E[price after] = p − s: q is a martingale. The contract settles YES if
+U < q at its day's end (U its event's draw above), so P(YES | its path so far) = q. Each
+sweep through `side` is a row, with q after the step's news and before the sweep, and
+the mid, q rounded to a unit. An `Edge` makes a fill on q in [lo, hi) `cents` cheaper
+(`extra`), on the same paths.
 """
 
 from __future__ import annotations
@@ -38,11 +53,13 @@ from kalshibot.kalshi.models import PRICE_SCALE, SIZE_SCALE
 from kalshibot.research.validation.null import bucket_intervals
 
 TAKER = FeeTerms.from_series("quadratic", "1", "balance")
+NOISE = 0.5  # the share of sweeps leaving a book that revert, and 1/tail of their depths
 
 
 @dataclass(frozen=True)
 class Edge:
-    """The bought side's ask is `cents` too low for true P(YES) in [lo, hi)."""
+    """The bought side's ask is `cents` too low for true P(YES) in [lo, hi), or, in a sweep
+    world, a fill on q in [lo, hi) costs `cents` less."""
 
     lo: float
     hi: float
@@ -79,13 +96,60 @@ def _break_even_ask(p_win: np.ndarray) -> np.ndarray:
     return best
 
 
+def _news(q: np.ndarray, beta: float, u: np.ndarray) -> np.ndarray:
+    """q after news of strength `beta`, from a uniform u: up with probability
+    (1 + β(2q − 1))/2, each way by Bayes' rule."""
+    tilt = beta * (2 * q - 1)
+    return q * np.where(u < (1 + tilt) / 2, (1 + beta) / (1 + tilt), (1 - beta) / (1 - tilt))
+
+
+def _sweep(p: np.ndarray, scale: float, v: np.ndarray, w: np.ndarray
+           ) -> tuple[np.ndarray, np.ndarray]:
+    """(bottom, price after) of sweeps selling a contract priced `p`, from uniforms v
+    (depth) and w (noise if below NOISE, unless the book emptied)."""
+    bottom = np.maximum(p - scale * v**-NOISE, 0.0)
+    return bottom, np.where((w < NOISE) & (bottom > 0), p, bottom)
+
+
+def _paths(df: pd.DataFrame, u: np.ndarray, sweeps: float, scale: float, news: float,
+           side: str, edge: Edge, rng: np.random.Generator) -> pd.DataFrame:
+    """The sweeps through `side` of binaries `df` (row r is event r) whose draws are `u`."""
+    q = df["q"].to_numpy().copy()
+    count = rng.poisson(sweeps, len(q))
+    parts = []
+    for k in range(count.max(initial=0)):
+        i = np.flatnonzero(k < count)
+        if news:
+            q[i] = _news(q[i], news, rng.random(len(i)))
+        i = i[(q[i] >= scale) & (q[i] <= 1 - scale)]
+        sells_yes = rng.random(len(i)) < 0.5
+        p = np.where(sells_yes, q[i], 1 - q[i])
+        bottom, after = _sweep(p, scale, rng.random(len(i)), rng.random(len(i)))
+        mine = sells_yes == (side == "yes")
+        parts.append(pd.DataFrame({"row": i[mine], "minute": k + 1, "q": q[i[mine]],
+                                   "bottom": bottom[mine] * PRICE_SCALE}))
+        q[i] = np.where(sells_yes, after, 1 - after)
+    out = pd.concat(parts, ignore_index=True)
+    row = out.pop("row").to_numpy()
+    contract = df.iloc[row][["event", "ticker", "mutually_exclusive", "position", "ladder",
+                             "below", "day"]].reset_index(drop=True)
+    return pd.concat([contract, out], axis=1).assign(
+        mid=np.round(out["q"] * PRICE_SCALE), extra=edge.units(out["q"].to_numpy()),
+        yes=u[row] < q[row])  # q is the truth at the day's end now
+
+
 def world(days: int, events_per_day: int, rng: np.random.Generator, quotes: str = "market",
           edge: Edge = NO_EDGE, bucket_share: float = 0.5, half_spread_cents: float = 1.0,
           shock: float = 0.0, persistence: float = 0.0, strike_share: float = 0.0,
-          side: str = "no", first_day: int = 0) -> pd.DataFrame:
+          side: str = "no", first_day: int = 0, sweeps: float = 0.0, sweep_scale: float = 0.05,
+          news: float = 0.0) -> pd.DataFrame:
     """One row per contract, in `null.inputs`' terms (event, ticker, mutually_exclusive,
-    position, ladder, below), plus day, q, yes, ask_yes / ask_no (price units). Days are
-    numbered from `first_day`."""
+    position, ladder, below, mid), plus day, q, yes, ask_yes / ask_no (price units). Days
+    are numbered from `first_day`. With `sweeps`, one row per sweep through `side` instead
+    (`_paths`): the contract's columns, minute, q and mid before the sweep, its bottom in
+    `side`'s price units, the fill's discount `extra` (price units) and yes."""
+    if sweeps and (bucket_share or quotes != "boundary"):
+        raise ValueError("a sweep world is boundary binaries: bucket_share=0, quotes='boundary'")
     n = days * events_per_day
     size = np.where(rng.random(n) < bucket_share, rng.integers(3, 8, n), 1)
     z = rng.standard_normal(days)
@@ -119,6 +183,8 @@ def world(days: int, events_per_day: int, rng: np.random.Generator, quotes: str 
     df["event"] = f"E{first_day}-" + df["event_id"].astype(str)
     df["ticker"] = df["event"] + "-" + df["bucket"].astype(str)
     df["position"], df["below"] = df["bucket"], True  # ladders settle YES when U < q: [0, q)
+    if sweeps:
+        return _paths(df, u, sweeps, sweep_scale, news, side, edge, rng)
     q = df["q"].to_numpy()
     p_win = q if side == "yes" else 1 - q
     half = round(half_spread_cents * 100)
@@ -131,5 +197,6 @@ def world(days: int, events_per_day: int, rng: np.random.Generator, quotes: str 
     ask = np.clip(ask - edge.units(q), 1, PRICE_SCALE - 1)
     other = np.clip(PRICE_SCALE - ask + 2 * half, 1, PRICE_SCALE - 1)
     df["ask_yes"], df["ask_no"] = (ask, other) if side == "yes" else (other, ask)
-    return df[["event", "ticker", "mutually_exclusive", "position", "ladder", "below", "day",
-               "q", "yes", "ask_yes", "ask_no"]]
+    df["mid"] = (df["ask_yes"] + PRICE_SCALE - df["ask_no"]) / 2
+    return df[["event", "ticker", "mutually_exclusive", "position", "ladder", "below", "mid",
+               "day", "q", "yes", "ask_yes", "ask_no"]]

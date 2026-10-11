@@ -7,8 +7,13 @@ narrow); a mixed family also has a configuration buying YES favorites. Each worl
 discovery period, where the configuration is picked by Sharpe, four times as long as
 the confirmation period that tests it (the real calendar's ratio is about ten); the
 periods can differ (`confirmation`), e.g. an edge that vanishes at the seam or a busier
-market. `one_world` returns every statistic the candidate
-decision procedures use, and `PROCEDURES` turns them into "edge found":
+market. A maker family (`depths`, in a sweep world: `synthetic.py`, Resting bids) has
+a configuration per depth instead: a bid per contract that far below its side's truth,
+re-pegged to the cent grid before every sweep, buying one contract on each sweep through
+it (Tier 1's rule), priced by the null at the mid before that sweep; `_coupling` measures
+how far the null's nested intervals understate the variance of a contract's repeated
+fills. `one_world` returns every statistic the candidate decision procedures use, and
+`PROCEDURES` turns them into "edge found":
 
 - naive in-sample: the best discovery Sharpe has a one-sided t-stat above z(1 − α);
 - naive confirmation: a t-test on the chosen configuration's confirmation daily returns;
@@ -25,9 +30,11 @@ decision procedures use, and `PROCEDURES` turns them into "edge found":
 `rates` reports how often each procedure declares an edge: its size (false positive
 rate) where the truth has no edge, its power where it has one. `python -m
 kalshibot.research.validation.conformance` runs `GRID`, the worlds behind the gate choice,
-and prints the two tables in docs/BACKTESTING.md; append rows only, since each row is
-seeded by its position. `... conformance power` checks `gauntlet.power`, the estimate
-behind an Inconclusive verdict, against the gauntlet's measured power (`PREDICTION_GRID`).
+and prints the two tables in docs/BACKTESTING.md, then each maker row's coupling R;
+append rows only, since each row is seeded by its position. `... conformance power`
+checks `gauntlet.power`, the estimate behind an Inconclusive verdict, against the
+gauntlet's measured power (`PREDICTION_GRID`).
+`--only <prefix>` runs only the rows whose label starts with it (e.g. "makers:").
 """
 
 from __future__ import annotations
@@ -54,25 +61,69 @@ MIN_DSR, MAX_PBO = 0.95, 0.2  # candidate gates, measured
 BASE = pd.Timestamp("2020-01-01", tz="UTC")  # day 0 of every world
 
 
-def _configs(side: str, favorites: bool) -> list[tuple[str, str, int]]:
-    """(name, side bought, YES-ask cutoff: ≤ cutoff, or ≥ −cutoff when negative)."""
+def _configs(side: str, favorites: bool, depths: tuple[int, ...] | None = None
+             ) -> list[tuple[str, str, int]]:
+    """(name, side bought, YES-ask cutoff: ≤ cutoff, or ≥ −cutoff when negative), or with
+    `depths` (name, side, how far below the side's truth its bid rests), shallowest
+    first."""
+    if depths:
+        if not all(d > 0 and d % 100 == 0 for d in depths):  # names count whole cents
+            raise ValueError(f"depths must be whole cents, in price units: {depths}")
+        return [(f"{side} bid {d // 100}¢ below the truth", side, d) for d in sorted(depths)]
     out = [(f"{side} ≤ {t}", side, t) for t in THRESHOLDS]
     return out + [("yes ≥ favorites", "yes", -FAVORITES)] if favorites else out
 
 
 def _positions(df: pd.DataFrame, config: tuple[str, str, int]) -> pd.DataFrame:
-    """One contract bought per quote the configuration takes, in the columns
-    `settle.daily_returns` and `gauntlet.Positions.from_frame` read."""
+    """One contract bought per quote the configuration takes, or per sweep through its bid
+    in a sweep world, in the columns `settle.daily_returns` and
+    `gauntlet.Positions.from_frame` read, plus `expected`: its true expected net PnL."""
     _, side, cut = config
-    pos = df[df["ask_yes"] <= cut if cut > 0 else df["ask_yes"] >= -cut].copy()
+    if "bottom" in df:  # a bid on the cent grid `cut` below the side's truth, re-pegged
+        truth = df["q"] if side == "yes" else 1 - df["q"]
+        bid = (truth * PRICE_SCALE - cut) // 100 * 100
+        hit = (bid > 0) & (df["bottom"] < bid)
+        pos, bid = df[hit].copy(), bid[hit]
+        price = np.maximum(bid - pos["extra"], 1)
+        pos["cost"] = pos["paid"] = price * SIZE_SCALE  # no maker fee
+        pos["expected"] = (bid - price) * SIZE_SCALE  # E[price after | fill] = bid
+        pos["priced_at"] = pos["fill_time"] = (  # 30 s into the sweep's minute
+            BASE + pd.to_timedelta(pos["day"], unit="D")
+            + pd.to_timedelta(pos["minute"] * 60 + 30, unit="s"))
+        pos["close_time"] = BASE + pd.to_timedelta(pos["day"] + 1, unit="D")
+    else:
+        pos = df[df["ask_yes"] <= cut if cut > 0 else df["ask_yes"] >= -cut].copy()
+        ask = pos["ask_yes" if side == "yes" else "ask_no"].to_numpy()
+        pos["cost"] = pos["paid"] = synthetic.taker_cost(ask)
+        pos["expected"] = synthetic.taker_net(pos["q"] if side == "yes" else 1 - pos["q"], ask)
+        pos["priced_at"] = pos["fill_time"] = pos["close_time"] = (
+            BASE + pd.to_timedelta(pos["day"], unit="D") + pd.Timedelta(hours=12))  # mid-day
     pos["side"], pos["fill_count"] = side, SIZE_SCALE
     pos["won"] = pos["yes"] if side == "yes" else ~pos["yes"]
-    pos["cost"] = pos["paid"] = synthetic.taker_cost(
-        pos["ask_yes" if side == "yes" else "ask_no"].to_numpy())
     pos["pnl"] = np.where(pos["won"], PRICE_SCALE * SIZE_SCALE, 0) - pos["cost"]
-    pos["priced_at"] = pos["fill_time"] = pos["close_time"] = (
-        BASE + pd.to_timedelta(pos["day"], unit="D") + pd.Timedelta(hours=12))  # mid-day
     return pos
+
+
+def _coupling(pos: pd.DataFrame) -> float:
+    """R: of one-contract positions on one side, one contract per cluster, the ratio of
+    the variance at the boundary (each fill winning with its break-even, given the
+    earlier ones) of a contract's summed wins less break-evens,
+    Σ_j (2·rank_j − 1)·B_j(1 − B_j) with fills ranked by time, to the null's (above 1:
+    the null understates it), both from prices alone. In the null, on nested intervals,
+    fills covary by p_i(1 − p_j) for P(YES) p_i ≤ p_j, scaled to the larger break-even
+    variances. The denominator is `null._clusters`' var_b in closed form (the tests
+    check it); it moves to null.py before a maker family registers (ROADMAP M3)."""
+    pos = pos.sort_values(["cluster", "p_yes"])
+    p, cluster = pos["p_yes"], pos["cluster"]
+    b = pos["paid"] / (pos["fill_count"] * PRICE_SCALE)
+    later = pos.groupby("cluster")["priced_at"].rank(method="first")
+    truth = ((2 * later - 1) * b * (1 - b)).sum()
+    by_cluster = pd.DataFrame({  # the null's: Σ_i p_i(1 − p_i) + 2 Σ_{i<j} p_i(1 − p_j)
+        "var": p * (1 - p) + 2 * (1 - p) * (p.groupby(cluster).cumsum() - p),
+        "own": p * (1 - p), "boundary": np.maximum(p * (1 - p), b * (1 - b))}
+    ).groupby(cluster).sum()
+    null_var = (by_cluster["var"] * by_cluster["boundary"] / by_cluster["own"]).sum()
+    return float(truth / null_var) if null_var > 0 else math.nan
 
 
 def _daily(pos: pd.DataFrame, days: range) -> pd.Series:
@@ -99,25 +150,38 @@ def _romano_wolf(conf: pd.DataFrame, configs: list, rng: np.random.Generator,
     return float(stats.romano_wolf(np.array(observed), np.column_stack(simulated)).min())
 
 
+def _world(rng: np.random.Generator, seam: int, confirmation_days: int, events_per_day: int,
+           side: str, quotes: str, depths: tuple[int, ...] | None = None,
+           confirmation: dict | None = None, **world) -> pd.DataFrame:
+    """`one_world`'s world: `synthetic.world` for discovery, then from day `seam` with
+    `confirmation` overriding `world` (and `events_per_day`). With `depths` (price units),
+    a sweep world in both periods whose sweeps reach the shallowest."""
+    later = {"events_per_day": events_per_day, **world, **(confirmation or {})}
+    if any(bool(depths) != bool(settings.get("sweeps")) for settings in (world, later)):
+        raise ValueError("depths and sweeps go together: a maker family in a sweep world")
+    if depths:
+        world["sweep_scale"] = later["sweep_scale"] = min(depths) / PRICE_SCALE
+    return pd.concat([synthetic.world(seam, events_per_day, rng, quotes, side=side, **world),
+                      synthetic.world(confirmation_days, later.pop("events_per_day"), rng,
+                                      quotes, side=side, first_day=seam, **later)],
+                     ignore_index=True)
+
+
 def one_world(rng: np.random.Generator, side: str = "no", quotes: str = "boundary",
               discovery_days: int = 400, confirmation_days: int = 100,
               events_per_day: int = 20, favorites: bool = False,
-              confirmation: dict | None = None, gates: gauntlet.Gates = GATES,
-              predict: bool = False, **world) -> dict[str, float]:
-    """Every decision statistic for one synthetic world. `world` goes to `synthetic.world`
-    for both periods; `confirmation` overrides it (and `events_per_day`) for the second.
-    With `predict`, also `gauntlet.power` on the chosen configuration's confirmation
-    sample at the world's true net edge."""
+              depths: tuple[int, ...] | None = None, confirmation: dict | None = None,
+              gates: gauntlet.Gates = GATES, predict: bool = False,
+              **world) -> dict[str, float]:
+    """Every decision statistic for one synthetic world (`_world`); with `depths`, of a
+    maker family. With `predict`, also `gauntlet.power` on the chosen configuration's
+    confirmation sample at the world's true net edge."""
     seam, days = discovery_days, discovery_days + confirmation_days
-    later = {"events_per_day": events_per_day, **world, **(confirmation or {})}
-    df = pd.concat([synthetic.world(seam, events_per_day, rng, quotes, side=side, **world),
-                    synthetic.world(confirmation_days, later.pop("events_per_day"), rng,
-                                    quotes, side=side, first_day=seam, **later)],
-                   ignore_index=True)
-    df = null.inputs(df.assign(mid=(df["ask_yes"] + PRICE_SCALE - df["ask_no"]) / 2),
-                     gates.devig)  # one snapshot: every contract quoted once
+    # takers: every contract quoted once; makers: at each sweep, a cluster per contract
+    df = null.inputs(_world(rng, seam, confirmation_days, events_per_day, side, quotes, depths,
+                            confirmation, **world), gates.devig)
     disc, conf = df[df["day"] < seam], df[df["day"] >= seam]
-    configs = _configs(side, favorites)
+    configs = _configs(side, favorites, depths)
     disc_returns = pd.DataFrame({c[0]: _daily(_positions(disc, c), range(seam))
                                  for c in configs})
     chosen = next(c for c in configs if c[0] == gauntlet.select(disc_returns))
@@ -131,12 +195,11 @@ def one_world(rng: np.random.Generator, side: str = "no", quotes: str = "boundar
                           gauntlet.Positions.from_frame(pos), rng, gates)
     p_t = (scipy_stats.ttest_1samp(conf_returns, 0, alternative="greater").pvalue
            if conf_returns.std() > 0 else 1.0)
-    p_win = np.where(pos["side"] == "yes", pos["q"], 1 - pos["q"])
-    ask = np.where(pos["side"] == "yes", pos["ask_yes"], pos["ask_no"])
-    edge = float(synthetic.taker_net(p_win, ask).mean()) if len(pos) else 0.0
+    edge = float(pos["expected"].mean()) if len(pos) else 0.0
     out = {**asdict(v), "p_value": v.p_value, "t_in": float(t_in), "p_t": float(p_t),
            "p_rw": _romano_wolf(conf, configs, rng, gates.draws),
-           "edge_per_position": edge, "positions_per_day": len(pos) / confirmation_days}
+           "edge_per_position": edge, "positions_per_day": len(pos) / confirmation_days,
+           "coupling": _coupling(pos) if depths else math.nan}
     if predict:
         out["power_predicted"] = gauntlet.power(
             gauntlet.Positions.from_frame(every), gauntlet.Positions.from_frame(pos),
@@ -161,7 +224,7 @@ PROCEDURES = {
     "widened null": lambda s, a: s["p_null"] <= a,
     "gauntlet": lambda s, a: s["p_value"] <= a,
 }
-MEANS = ("edge_per_position", "rho", "cross_day", "widening", "positions_per_day")
+MEANS = ("edge_per_position", "rho", "cross_day", "widening", "positions_per_day", "coupling")
 
 
 def _world_task(args):
@@ -179,7 +242,8 @@ def simulate(worlds: int, seed: int = 0, **kwargs) -> list[dict[str, float]]:
 def rates(results: list[dict[str, float]], alpha: float = GATES.alpha) -> dict[str, float]:
     """Share of worlds in which each procedure declares an edge at level `alpha`, plus
     the means of `MEANS` (the true net edge per confirmed position in micro-dollars, the
-    gauntlet's dependence estimates and widening, confirmed positions per day)."""
+    gauntlet's dependence estimates and widening, confirmed positions per day, and a
+    maker family's `_coupling`, NaN for takers)."""
     out = {name: float(np.mean([bool(rule(s, alpha)) for s in results]))
            for name, rule in PROCEDURES.items()}
     out.update({k: float(np.mean([s[k] for s in results])) for k in MEANS})
@@ -188,6 +252,9 @@ def rates(results: list[dict[str, float]], alpha: float = GATES.alpha) -> dict[s
 
 LONGSHOTS = (0.0, 0.15)  # true P(YES) below 15%
 BINARIES_SHOCK = {"shock": 0.5, "bucket_share": 0.0}
+MAKERS = {"bucket_share": 0.0, "depths": (500, 1000, 1500, 2500), "sweeps": 16}  # H8's
+MAKERS_STRESS = {"bucket_share": 0.0, "depths": (100, 200, 300, 500), "sweeps": 64,
+                 "news": 0.1}  # shallow, as H2's may rest
 GRID = [  # (label, worlds, one_world settings); no edge unless the label says so
     ("market prices: buying NO loses spread + fee", 400, {"quotes": "market"}),
     ("boundary", 2000, {}),
@@ -231,6 +298,17 @@ GRID = [  # (label, worlds, one_world settings); no edge unless the label says s
       "confirmation": {"edge": synthetic.Edge(*LONGSHOTS, 1)}}),
     *[(f"YES family: {c}¢ lower YES asks on q < 0.15", 400,
        {"side": "yes", "edge": synthetic.Edge(*LONGSHOTS, c)}) for c in (1, 2, 3)],
+    ("makers: NO bids 5–25¢ below the truth, 16 sweeps a contract", 2000, MAKERS),
+    ("makers: NO bids 5–25¢ below the truth, shock ρ = 0.5 lasting days (φ = 0.8)", 2000,
+     {**MAKERS, "shock": 0.5, "persistence": 0.8}),
+    ("makers: NO bids 1–5¢ below the truth, 64 sweeps a contract and news", 2000,
+     MAKERS_STRESS),
+    ("makers: NO bids 1–5¢ below the truth, 64 sweeps and news, shock ρ = 0.5 lasting days "
+     "(φ = 0.8)", 2000, {**MAKERS_STRESS, "shock": 0.5, "persistence": 0.8}),
+    ("makers: NO bids 1¢ below the truth only, 64 sweeps a contract and news", 2000,
+     {**MAKERS_STRESS, "depths": (100,)}),
+    ("makers: NO bids 5¢ below the truth only, 16 sweeps a contract", 2000,
+     {**MAKERS, "depths": (500,)}),
 ]
 POWER_COLUMNS = ["naive in-sample", "null", "null + DSR", "null + DSR + PBO", "Romano–Wolf",
                  "widened null", "gauntlet"]
@@ -258,22 +336,28 @@ POWER_HEADER = ("| Edge world | true net edge per position | positions/day | "
                 + " | ".join(POWER_COLUMNS) + " |")
 
 
-def _rows(grid: list, scale: float, seed: int = 0, **extra):
-    """(label, worlds, settings, `one_world` results) for each row of a grid, in order,
-    each row seeded by its position."""
+def _rows(grid: list, scale: float, seed: int = 0, only: str = "", **extra):
+    """(label, worlds, settings, `one_world` results) for each row of a grid whose label
+    starts with `only`, in order, each row seeded by its position in the grid."""
     for i, (label, worlds, kwargs) in enumerate(grid):
+        if not label.startswith(only):
+            continue
         n = max(20, int(worlds * scale))
         yield label, n, kwargs, simulate(n, seed=seed + i, **extra, **kwargs)
         print(f"{label}: done", file=sys.stderr, flush=True)
 
 
-def report(scale: float = 1.0) -> str:
-    """The size and power tables in docs/BACKTESTING.md, from `GRID` (`scale` shrinks it)."""
+def report(scale: float = 1.0, only: str = "") -> str:
+    """The size and power tables in docs/BACKTESTING.md, from `GRID` (`scale` shrinks it;
+    `only`, see `_rows`), then each maker row's mean `_coupling`."""
     size = [SIZE_HEADER, "|---|---|---|---|---|" + "---|" * len(PROCEDURES)]
     power = [POWER_HEADER, "|---|---|---|" + "---|" * len(POWER_COLUMNS)]
-    for label, n, kwargs, results in _rows(GRID, scale):
+    coupling = []
+    for label, n, kwargs, results in _rows(GRID, scale, only=only):
         by_alpha = {a: rates(results, a) for a in (GATES.alpha, GATES.level)}
         r = by_alpha[GATES.alpha]
+        if "depths" in kwargs:
+            coupling.append(f"- {label}: R = {r['coupling']:.2f}")
         if _has_edge(kwargs):
             power.append(f"| {label} | {r['edge_per_position'] / CENT:+.2f}¢ | "
                          f"{r['positions_per_day']:.1f} | "
@@ -282,7 +366,7 @@ def report(scale: float = 1.0) -> str:
             size.append(f"| {label} | {n} | {r['rho']:.3f} | {r['cross_day']:.2f} | "
                         f"{r['widening']:.2f} | "
                         + " | ".join(_cell(by_alpha, c, n) for c in PROCEDURES) + " |")
-    return "\n".join(size) + "\n\n" + "\n".join(power)
+    return "\n\n".join("\n".join(block) for block in (size, power, coupling) if block)
 
 
 PREDICTION_GRID = [  # (label, worlds, one_world settings): edges on every contract bought
@@ -301,6 +385,10 @@ PREDICTION_GRID = [  # (label, worlds, one_world settings): edges on every contr
     ("mixed family (adds YES favorites): 1¢ lower NO asks, binaries only, shock ρ = 0.3, "
      "100 events/day", 300, {"favorites": True, "edge": synthetic.Edge(0.0, 1.0, 1),
                             "shock": 0.3, "bucket_share": 0.0, "events_per_day": 100}),
+    ("makers: fills 4¢ cheaper, NO bids 5–25¢ below the truth", 300,
+     {**MAKERS, "edge": synthetic.Edge(0.0, 1.0, 4)}),
+    ("makers: fills 3.5¢ cheaper, NO bids 1–5¢ below the truth, 64 sweeps and news", 300,
+     {**MAKERS_STRESS, "edge": synthetic.Edge(0.0, 1.0, 3.5)}),
 ]
 PREDICTION_HEADER = ("| Edge world | true net edge per position | widening | power "
                      "predicted / gauntlet's | the same where the cross-day estimate is "
@@ -320,15 +408,16 @@ def _calibration(results: list[dict[str, float]]) -> str:
     return f"**{text}**" if gap.mean() > 2 * gap.std(ddof=1) / np.sqrt(len(gap)) else text
 
 
-def prediction_report(scale: float = 1.0) -> str:
+def prediction_report(scale: float = 1.0, only: str = "") -> str:
     """The predicted-vs-measured power table in docs/BACKTESTING.md: `gauntlet.power`'s
     estimate, made as `confirm` makes it with conformance's draws, against how often the
     gauntlet found the edge, both at α/m; again over the worlds whose cross-day estimate
     is negative, where a per-day error would show (`gauntlet.power`). Synthetic positions
     settle on the day they are priced, so this doesn't measure the stand-in `confirm` uses for
-    later settlement."""
+    later settlement. `only`: see `_rows`."""
     rows = [PREDICTION_HEADER, "|---|---|---|---|---|"]
-    for label, _, _, results in _rows(PREDICTION_GRID, scale, seed=1000, predict=True):
+    for label, _, _, results in _rows(PREDICTION_GRID, scale, seed=1000, only=only,
+                                      predict=True):
         r, tilted = rates(results), [s for s in results if s["cross_day"] < 0]
         rows.append(f"| {label} | {r['edge_per_position'] / CENT:+.2f}¢ | "
                     f"{r['widening']:.2f} | {_calibration(results)} | "
@@ -337,7 +426,11 @@ def prediction_report(scale: float = 1.0) -> str:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:2] == ["power"]:
-        print(prediction_report(float(sys.argv[2]) if len(sys.argv) > 2 else 1.0))
+    args, only = sys.argv[1:], ""
+    if "--only" in args:
+        at = args.index("--only")
+        only, args = args[at + 1], args[:at] + args[at + 2:]
+    if args[:1] == ["power"]:
+        print(prediction_report(float(args[1]) if len(args) > 1 else 1.0, only))
     else:
-        print(report(float(sys.argv[1]) if len(sys.argv) > 1 else 1.0))
+        print(report(float(args[0]) if args else 1.0, only))

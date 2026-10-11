@@ -81,8 +81,14 @@ except what M3 fixes per family before its own confirmation test (the last list 
    Conformance checks the estimate against the gauntlet's measured power, over all
    worlds and over those whose cross-day estimate is negative (the third table below).
    It passes if predicted power never exceeds measured by more than 2 Monte Carlo
-   standard errors of their per-world difference (bold); a bold cell sends
-   `gauntlet.power` back for revision before any confirmation runs.
+   standard errors of their per-world difference (bold). A bold taker cell sends
+   `gauntlet.power` back for revision before any confirmation runs; a maker row in which
+   the gauntlet does not hold its size, or a maker row in bold in the third table, holds
+   the confirmation of every family of resting bids held to settlement until a revised
+   method passes the maker rows. Candidates, each going back through these rows: one
+   draw and one interval per contract for a maker's fills; each cluster's null variance
+   raised to the exact boundary covariance of its fills; a maker family's dependence
+   surprises centred at its break-evens.
 
 The null covers contracts held to settlement (step 2 keeps only decisions whose
 positions must settle inside their window). A position still open at the window's end
@@ -130,7 +136,12 @@ maximum holding period (which sets both embargoes and which markets count); the 
 rule's candle leg (the worse of the next 1-minute candle's extreme and the next print,
 or the print alone); the window-end bids that mark open positions (until they're wired
 in, zero); where needed, the path null; and, for a touch maker, its queue models and
-their calibration.
+their calibration. A family of resting bids held to settlement also checks its coupling
+R (Conformance, Coupling R), computed by the runner ([ROADMAP](ROADMAP.md#milestones)
+M3): the largest R among its configurations, each on its own discovery fills, must be at
+most some maker row's R (conservative: a row's R is a mean over the configurations its
+worlds selected); a family above every maker row's R needs a row at its R first. It
+trades standalone contracts only, unless a bucket or ladder maker row passes first.
 
 ## Fill models
 
@@ -193,14 +204,16 @@ the reference, and every engine's own PnL is reconciled against it.
 ## Conformance: how the confirmation test was chosen
 
 > Being re-measured for M3's dependence sample (discovery's last 400 days) and its new
-> world (a shock from the seam on); until then the two tables below are M2's, and the
-> third (`python -m kalshibot.research.validation.conformance power`) is pending.
+> worlds (a shock from the seam on, and the makers); until then the two tables below are
+> M2's, and the third (`python -m kalshibot.research.validation.conformance power`) is
+> pending. `--only makers:` runs the maker rows alone, seeded as in the full grid.
 
 `research/validation/conformance.py` runs the whole pipeline (selection, then the
 candidate tests) on synthetic worlds whose truth is known (`synthetic.py`). The family
 buys longshots as a taker paying 2026 fees: every contract whose YES ask is at most θ,
 for 7 values of θ from 6¢ to 20¢, buying NO (the favorite–longshot trade) or YES (its
-mirror); a mixed family adds a configuration buying YES favorites (asks of 80¢ or more).
+mirror); a mixed family adds a configuration buying YES favorites (asks of 80¢ or more);
+a maker family rests bids instead (the makers, below).
 A world has 20 events a day (or 100), half standalone binaries and half ladders of 3–7
 buckets; discovery is 400 days and confirmation the next 100 (the real calendar's ratio
 is about ten), and the dependence sample is the runner's (above). The worlds:
@@ -216,7 +229,29 @@ is about ten), and the dependence sample is the runner's (above). The worlds:
 - **seams:** an edge that exists only in discovery (the post-publication trap) or halves
   at the seam; a confirmation twice as busy as discovery; a shock that starts at the
   seam, so discovery can't see the dependence;
-- **edges:** asks lowered by a few cents on contracts with true P(YES) below 15%.
+- **edges:** asks lowered by a few cents on contracts with true P(YES) below 15%;
+- **makers:** resting NO bids on standalone binaries without fees, one configuration per
+  depth below the truth: 5, 10, 15 and 25¢ (H8's), or 1, 2, 3 and 5¢ (shallow, as H2's
+  may rest), and single-depth rows at the shallowest of each. Each bid buys one contract
+  on every sweep through it, as Tier 1 fills. The sweeps (`synthetic.py`, "Resting
+  bids") select adversely, yet leave every depth at zero net edge, the least favorable
+  null. The null prices each fill at the mid before its sweep, one sweep a minute (the
+  least favorable timing: with staler candles, several fills would share one null
+  interval, nearer the one outcome they share in truth), and gives a contract's fills
+  nested intervals on one draw, while in truth each fill covaries with every earlier one
+  by its own break-even variance; Coupling R, below, measures the difference. The maker
+  edge rows (the third table) make the same fills a few cents cheaper.
+
+Coupling R, for one configuration's fills: the sum over contracts of the variance at the
+boundary (each fill winning with its break-even, given the earlier ones) of a contract's
+summed wins less break-evens (its net PnL per $1), Σ_j (2·rank_j − 1)·B_j(1 − B_j)
+with its fills j ranked by time and B the break-even, over the sum of the null's (its
+nested-interval variance, scaled up to the break-even variances: `null._clusters`'
+var_b), both from prices alone. Above 1 the null understates the variance; below 1 (deep
+bids) it is conservative. It counts repeated fills through its rank weights, so fills
+per contract need no separate check. The run prints each maker row's R below the tables:
+the mean over its worlds of the selected configuration's, in a single-depth row that
+depth's own.
 
 A procedure holds its size if, in every world without an edge, it finds one at most
 α + 2 Monte Carlo standard errors of the time, at α = 0.05 and at 0.05/12 (Holm's first
