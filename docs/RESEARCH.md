@@ -29,6 +29,11 @@ API keys, so use it for all execution testing.
 - **Ed25519 keys are the default since Oct 1, 2026**; RSA-2048 (RSA-PSS/SHA-256) is still
   supported. `kalshibot.kalshi.auth.KalshiSigner` handles both.
 - WebSocket handshakes must be signed even for public channels (sign `GET /trade-api/ws/v2`).
+- Keys carry scopes, which `GET /api_keys` lists per key: `read` and `write`, and
+  narrower ones (`read::portfolio_balance`, `write::trade`, `write::transfer`, …) granted
+  without their parent ([`GET /api_keys`](https://docs.kalshi.com/api-reference/api-keys/get-api-keys)).
+  A key created without scopes has full access
+  ([create key](https://docs.kalshi.com/api-reference/api-keys/create-api-key)).
 - [docs: API keys](https://docs.kalshi.com/getting_started/api_keys)
 
 ### Public market data (no auth) ✅

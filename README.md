@@ -25,9 +25,10 @@ kalshibot research report H1             # Tier 2 on that confirmation, again
 ```
 
 Market data uses Kalshi's public endpoints and needs no account. Recording live order
-books needs a read-only prod key in `.env` (see `.env.example`); until then,
-`kalshibot record --rest --series KXBTCD --series KXBTC15M` snapshots full books keylessly
-(the crypto series H4 and H11 need; add others as families need them).
+books needs a read-only prod key in `.env` (see `.env.example`). `kalshibot whoami` checks
+with Kalshi that the key can only read, and `record` refuses any other. Until the key
+exists, `kalshibot record --rest --series KXBTCD --series KXBTC15M` snapshots full books
+keylessly (the crypto series H4 and H11 need; add others as families need them).
 Run the recorder on an always-on machine, in a terminal multiplexer so it outlives the
 window; a failure stays on screen:
 

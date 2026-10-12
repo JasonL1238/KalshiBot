@@ -27,6 +27,12 @@ RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 ORDERBOOKS_MAX = 100  # markets per GET /markets/orderbooks
 
 
+def read_only(scopes: list[str]) -> bool:
+    """Whether API key scopes (`KalshiClient.key_scopes`) only read: "read" or "read::…",
+    at least one. "write" and "write::…" act on the account (orders, transfers)."""
+    return bool(scopes) and all(s == "read" or s.startswith("read::") for s in scopes)
+
+
 class KalshiClient:
     def __init__(
         self,
@@ -222,7 +228,14 @@ class KalshiClient:
         return self._paginate("/historical/trades", "trades",
                               {"ticker": ticker, "min_ts": min_ts, "max_ts": max_ts})
 
-    # ---- portfolio (authenticated) --------------------------------------------------
+    # ---- account and portfolio (authenticated) --------------------------------------
+
+    def key_scopes(self, key_id: str) -> list[str]:
+        """The scopes Kalshi lists for the account's API key `key_id` (`GET /api_keys`)."""
+        for key in self._request("GET", "/api_keys", auth=True)["api_keys"]:
+            if key["api_key_id"] == key_id:
+                return list(key["scopes"])
+        raise LookupError(f"Kalshi doesn't list API key {key_id} for its account")
 
     def get_balance(self) -> dict[str, Any]:
         return self._request("GET", "/portfolio/balance", auth=True)

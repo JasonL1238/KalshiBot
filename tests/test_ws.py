@@ -319,6 +319,7 @@ def test_rest_recording_runs_without_retries(monkeypatch):
         seen.append((make_client()._max_retries, series, every))
 
     monkeypatch.setattr(cli, "record_snapshots", fake)
+    monkeypatch.setattr(cli, "_read_only_signer", lambda: pytest.fail("--rest loaded the key"))
     out = CliRunner().invoke(cli.app, ["record", "--rest", "--series", "S", "--every", "5"])
     assert out.exit_code == 0 and seen == [(0, ["S"], 5.0)]
 

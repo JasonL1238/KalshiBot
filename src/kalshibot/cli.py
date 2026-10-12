@@ -15,6 +15,7 @@ from kalshibot.data import backfill as bf
 from kalshibot.data.record import open_markets, record_snapshots
 from kalshibot.data.record import record as record_frames
 from kalshibot.kalshi import KalshiClient, KalshiSigner
+from kalshibot.kalshi.client import read_only
 from kalshibot.kalshi.models import PRICE_SCALE
 from kalshibot.research import ledger, run
 from kalshibot.research.load import Loader
@@ -131,6 +132,23 @@ def research_report(family: Family):
     typer.echo(run.report(*_family(family)))
 
 
+def _read_only_signer() -> KalshiSigner:
+    """A signer for the prod data key in .env, once Kalshi confirms the key can only read.
+    A key that could act on the account, or whose scopes can't be confirmed, is refused
+    before it signs anything else. The only way commands load that key."""
+    key = load_data_key()
+    signer = KalshiSigner.from_pem(key.key_id, key.pem)
+    try:
+        with KalshiClient(MARKET_DATA_URL, signer) as client:
+            scopes = client.key_scopes(key.key_id)
+    except Exception as e:
+        raise SystemExit(f"Couldn't confirm the .env key is read-only ({e}); refusing it.") from e
+    if not read_only(scopes):
+        raise SystemExit(f"The .env key's scopes are {scopes}, not read-only: delete it on "
+                         "kalshi.com and create one with only the read scope.")
+    return signer
+
+
 @app.command()
 def record(
     channels: str = typer.Option("orderbook_delta,trade", help="Comma-separated WS channels"),
@@ -146,6 +164,8 @@ def record(
         raise typer.BadParameter("--rest needs --series: every open market is too many "
                                  "requests per round")
 
+    signer = None if rest else _read_only_signer()
+
     def universe() -> list[str]:
         with bf.public_clients(1)() as client:
             return [m["ticker"] for m in open_markets(client, series)]
@@ -155,9 +175,8 @@ def record(
             job = record_snapshots(bf.public_clients(1, max_retries=0), series,
                                    data_dir() / "raw" / "rest", every)
         else:
-            key = load_data_key()
-            job = record_frames(KalshiSigner.from_pem(key.key_id, key.pem), universe,
-                                data_dir() / "raw" / "ws", channels.split(","))
+            job = record_frames(signer, universe, data_dir() / "raw" / "ws",
+                                channels.split(","))
         task = asyncio.create_task(job)
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):  # stop cleanly: flush, log
@@ -170,11 +189,11 @@ def record(
 
 @app.command()
 def whoami():
-    """Check the prod data key from .env by fetching your balance (the key must be read-only)."""
-    key = load_data_key()
-    with KalshiClient(MARKET_DATA_URL, KalshiSigner.from_pem(key.key_id, key.pem)) as client:
+    """Check the prod data key from .env: Kalshi lists it as read-only, and it reads your
+    balance."""
+    with KalshiClient(MARKET_DATA_URL, _read_only_signer()) as client:
         balance = client.get_balance()
-    typer.echo(f"[prod data key] authenticated OK. Balance: {balance}")
+    typer.echo(f"[prod data key] read-only. Balance: {balance}")
 
 
 if __name__ == "__main__":
