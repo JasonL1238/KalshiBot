@@ -4,6 +4,7 @@ server, REST snapshots against a mock transport."""
 import asyncio
 import json
 
+import click
 import httpx
 import pyarrow.parquet as pq
 import pytest
@@ -326,5 +327,5 @@ def test_rest_recording_runs_without_retries(monkeypatch):
 
 def test_rest_recording_needs_series(monkeypatch):
     monkeypatch.setattr(cli, "record_snapshots", lambda *a: pytest.fail("recorded"))
-    out = CliRunner().invoke(cli.app, ["record", "--rest"])
-    assert out.exit_code != 0 and "--series" in out.output
+    out = CliRunner().invoke(cli.app, ["record", "--rest"])  # rich colors it under GITHUB_ACTIONS
+    assert out.exit_code != 0 and "--series" in click.unstyle(out.output)
