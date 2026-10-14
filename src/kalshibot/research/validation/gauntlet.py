@@ -28,7 +28,7 @@ from kalshibot.research.validation import null, stats
 @dataclass(frozen=True)
 class Gates:
     alpha: float = 0.05  # family-wise error rate across all pre-registered families
-    families: int = 12  # Holm's m; a family never run counts as p = 1
+    families: int = 12  # Holm's m, a place per hypothesis; one with no family run is p = 1
     draws: int = 20_000  # null outcome draws and bootstrap resamples
     pbo_blocks: int = 10
     devig: str = "multiplicative"  # how `null.inputs` turns an event's mids into P(YES)
@@ -215,11 +215,12 @@ def power(discovery_positions: Positions, positions: Positions, days: np.ndarray
 
 
 def decide(p_values: Mapping[str, float], gates: Gates = PREREGISTERED) -> dict[str, bool]:
-    """Which families pass, with family-wise error ≤ `gates.alpha` over all
-    `gates.families` (m) pre-registered families. A family confirmed forward
+    """Which families pass, with family-wise error ≤ `gates.alpha` over the
+    `gates.families` (m) places, one per hypothesis. A family confirmed forward
     (`calendar.FORWARD`, f of them) is decided alone at α/m once its window has settled;
-    the others by Holm over the remaining m − f places at α(m − f)/m, a family not run
-    counting as p = 1. The union bound adds the two, so neither waits for the other."""
+    the others by Holm over the remaining m − f places at α(m − f)/m, a place with no
+    family run counting as p = 1. The union bound adds the two, so neither waits for the
+    other."""
     m, forward = gates.families, calendar.FORWARD
     rest = [n for n in p_values if n not in forward]
     places = m - len(forward)

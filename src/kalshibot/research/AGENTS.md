@@ -20,8 +20,8 @@ Hypotheses and verdicts: [docs/STRATEGIES.md](../../../docs/STRATEGIES.md).
 | `validation/null.py` | Market-calibrated null: inputs from de-vigged mids (multiplicative/Shin), cluster-coherent outcome draws, recentered PnL, same-day and cross-day dependence and the widening they imply, p-values |
 | `validation/stats.py` | PSR/DSR, effective trial count (ONC base step), PBO via CSCV, stationary-bootstrap p-value, Romano–Wolf step-down, Holm |
 | `validation/gauntlet.py` | The pre-registered decision procedure (`Gates`): discovery selection, the dependence sample, the confirmation test and its power, Holm across families (forward ones at their own α/12); diagnostics |
-| `validation/synthetic.py` | Synthetic worlds with a known truth (boundary null for YES or NO buyers, planted edges, same-day shocks that can last for days; for resting bids, price paths swept at the boundary; for repeated taker decisions, daily snapshots of posterior truths) |
-| `validation/conformance.py` | Size and power of every candidate procedure on those worlds (the grid behind the gate choice; `--only` runs rows by label prefix), a check of `gauntlet.power`, and the coupling ratio R of repeated positions (makers, H1-shaped) |
+| `validation/synthetic.py` | Synthetic worlds with a known truth (boundary null for YES or NO buyers, planted edges, same-day shocks that can last for days; for resting bids, price paths swept at the boundary; for repeated taker decisions, snapshots of posterior truths through a contract's day) |
+| `validation/conformance.py` | Size and power of every candidate procedure on those worlds (the grid behind the gate choice; `--only` runs rows by label prefix), a check of `gauntlet.power`, and the coupling ratios R and R̄ of repeated positions (makers, H1-shaped) |
 
 ## Rules for code here
 

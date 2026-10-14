@@ -46,15 +46,15 @@ exchange. Whether it makes money is a result to measure, not an assumption.
     after its verdict.
   - Before H1's confirmation test: H1-shaped taker rows in conformance (repeated
     positions on one contract, nested or sliding on one draw as the null prices them;
-    never measured for takers): built, measurement pending; the prediction rows' edges
-    set so the gauntlet's power at α/12 is 40–85%, re-set as appended rows if the
-    measurement lands outside. Then H1's coupling R check
+    never measured for takers): built and piloted at scale 0.1, measurement pending; the
+    prediction rows' edges set so the gauntlet's power at α/12 is 40–85%, re-set as
+    appended rows if the measurement lands outside. Then H1's coupling R check
     ([BACKTESTING](BACKTESTING.md), the pre-registration paragraph), its R̄ computed by
-    the runner: `_coupling` moved to `null.py`, looking up only the quotes its strike
-    terms need, contract i at time t_j for each i before j in a cluster (`quotes.needed`
-    and `mids` fetch them; a contract settled by t_j counts 0); buckets need none. A
-    bucket-heavy H1's R̄ may exceed every planned row's R (R̄/R ≈ 1.35–1.4 with
-    buckets), and then a higher-coupling row runs first, as the rule says.
+    the runner: `_coupling`'s R̄ half moved to `null.py`, looking up only the quotes its
+    strike terms need, contract i at time t_j for each i before j in a cluster
+    (`quotes.needed` and `mids` fetch them; a contract settled by t_j counts 0); buckets
+    need none. A bucket-heavy H1's R̄ may exceed every planned row's R, and then a
+    higher-coupling row runs first, as the rule says.
   - Round-trip accounting and a path null for families that exit before settlement,
     chosen in conformance first (candidates: [BACKTESTING](BACKTESTING.md)).
   - A recorded-stretch selection window in `calendar.py` and `run.py` for families
@@ -69,18 +69,19 @@ exchange. Whether it makes money is a result to measure, not an assumption.
       data arrives (ESPN plays, NWS daily summaries and METARs, Coinbase and Kraken
       trades);
     - Tier-1 maker fills per sweep through the bid, with the null priced at fill time
-      (built), then the maker world in conformance ([BACKTESTING](BACKTESTING.md)
-      step 6; built, measurement pending: pilot at scale 0.1 first; P1/P2 edges set so
-      the gauntlet's power at α/12 is 40–85%), then, before H2 or H8 registers, each maker
-      family's R̄ on its discovery fills, computed by the runner as for H1 (above);
+      (built), then the maker world in conformance ([BACKTESTING](BACKTESTING.md) step
+      6; built and piloted at scale 0.1, measurement pending; the maker prediction rows'
+      edges set so the gauntlet's power at α/12 is 40–85%), then, before H2 or H8
+      registers, each maker family's R̄ on its discovery fills, computed by the runner
+      as for H1 (above), and H8's gate count ([STRATEGIES](STRATEGIES.md) H8);
     - external data keyed by when it became available;
     - latency as a pre-registered parameter: PnL against latency, a negative-latency
       canary, a time-shift placebo;
     - after weeks of recorded books, queue-model fills for makers (hftbacktest,
-      NautilusTrader), calibrated on the user's own fills (You, item 7): a Tier 2 for
+      NautilusTrader), calibrated on the user's own fills (You, item 5): a Tier 2 for
       makers, and the verdict tier for touch makers (BACKTESTING step 3).
-  - Pre-register H1–H12 (m = 12, category strata), each with its minimum economically
-    meaningful edge.
+  - Pre-register H2–H12 except the dropped H6 (m = 12, category strata), each with its
+    minimum economically meaningful edge.
   - Run every confirmation test.
   - Apply Holm once to the in-calendar families (forward ones are decided alone).
   - Open the lockbox once for all in-calendar survivors.
@@ -142,11 +143,7 @@ The windows, their dates, and per-hypothesis confirmation starts are defined in
 3. When M4 asks, run the order round-trip benchmark on demo, and optionally from an AWS
    us-east-2 host.
 4. Decide whether to buy sportsbook odds history (H12).
-5. Rule on H8's gate: may sweep counts from forward days before H8's registration (no
-   outcomes) show whether sweeps survived the end of market orders?
-6. Keep H6 ([STRATEGIES](STRATEGIES.md#fast-maker-and-lag-families-scoped-2026-10-09)),
-   or drop it?
-7. Optionally, before M5, place a few tiny orders by hand to calibrate the makers'
+5. Optionally, before M5, place a few tiny orders by hand to calibrate the makers'
    queue model (M3).
-8. After M5: demo trading, then a small live stake. Compare live fills and PnL to the
+6. After M5: demo trading, then a small live stake. Compare live fills and PnL to the
    backtest.

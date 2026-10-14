@@ -33,8 +33,8 @@ understate the variance of a cluster's positions, repeated or on several contrac
 `rates` reports how often each procedure declares an edge: its size (false positive
 rate) where the truth has no edge, its power where it has one. `python -m
 kalshibot.research.validation.conformance` runs `GRID`, the worlds behind the gate choice,
-and prints the two tables in docs/BACKTESTING.md, then the coupling R of each row whose
-positions repeat; append rows only, since each row is seeded by its position.
+and prints the two tables in docs/BACKTESTING.md, then R and R̄ (`_coupling`) of each row
+whose positions repeat; append rows only, since each row is seeded by its position.
 `... conformance power` checks `gauntlet.power`, the estimate behind an Inconclusive
 verdict, against the gauntlet's measured power (`PREDICTION_GRID`).
 `--only <prefix>` runs only the rows whose label starts with it (e.g. "makers:").
@@ -131,9 +131,9 @@ def _coupling(pos: pd.DataFrame, quotes: pd.DataFrame) -> tuple[float, float]:
     """(R, R̄) (docs/BACKTESTING.md, Coupling R) of positions `pos` on the null's clusters.
     `quotes` (`null.inputs`' output, with each contract's truth q) gives every contract's
     interval at every time a position in its cluster is priced: the truths' for R
-    (`_true_intervals`), the null's for R̄, which counts two buckets' terms as 0. It moves
-    to null.py before H1's confirmation test or a maker family's registration (ROADMAP
-    M3)."""
+    (`_true_intervals`), the null's for R̄, which counts two buckets' terms as 0. Its R̄
+    half moves to null.py before H1's confirmation test or a maker family's registration
+    (ROADMAP M3); R, from the world's truths, stays here."""
     pos = pos.sort_values("priced_at", kind="stable")
     count = pos["fill_count"].to_numpy(float)
     b = pos["paid"].to_numpy() / (count * PRICE_SCALE)
@@ -246,7 +246,7 @@ def one_world(rng: np.random.Generator, side: str = "no", quotes: str = "boundar
     out = {**asdict(v), "p_value": v.p_value, "t_in": float(t_in), "p_t": float(p_t),
            "p_rw": _romano_wolf(conf, configs, rng, gates.draws),
            "edge_per_position": edge, "positions_per_day": len(pos) / confirmation_days,
-           **dict(zip(("coupling", "coupling_bound"), _coupling(pos, conf)
+           **dict(zip(("coupling", "r_bar"), _coupling(pos, conf)
                       if depths or "snapshot" in df else (math.nan, math.nan), strict=True))}
     if predict:
         out["power_predicted"] = gauntlet.power(
@@ -273,7 +273,7 @@ PROCEDURES = {
     "gauntlet": lambda s, a: s["p_value"] <= a,
 }
 MEANS = ("edge_per_position", "rho", "cross_day", "widening", "positions_per_day", "coupling",
-         "coupling_bound")
+         "r_bar")
 
 
 def _world_task(args):
@@ -420,9 +420,9 @@ def report(scale: float = 1.0, only: str = "") -> str:
     for label, n, kwargs, results in _rows(GRID, scale, only=only):
         by_alpha = {a: rates(results, a) for a in (GATES.alpha, GATES.level)}
         r = by_alpha[GATES.alpha]
-        if {"depths", "snapshots"} & kwargs.keys():  # positions repeat
+        if not math.isnan(r["coupling"]):  # positions repeat (NaN if a world has none)
             coupling.append(f"- {label}: R = {r['coupling']:.2f} "
-                            f"(R̄ from prices: {r['coupling_bound']:.2f})")
+                            f"(R̄ from prices: {r['r_bar']:.2f})")
         if _has_edge(kwargs):
             power.append(f"| {label} | {r['edge_per_position'] / CENT:+.2f}¢ | "
                          f"{r['positions_per_day']:.1f} | "

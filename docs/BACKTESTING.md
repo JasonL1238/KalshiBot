@@ -48,9 +48,9 @@ except what M3 fixes per family before its own confirmation test (the last list 
      break-even variance, to the same-day comovement of clusters, and to the persistence
      of shocks across days, both measured on every configuration's discovery positions
      (below); and the stationary bootstrap of daily returns;
-   - Holm across the 12 pre-registered families at family-wise α = 0.05 (a family not
-     run counts as p = 1), with the families confirmed forward split off at α/12 each
-     ([ROADMAP](ROADMAP.md#research-calendar));
+   - Holm across m = 12 places, one per hypothesis, at family-wise α = 0.05 (a place
+     with no family run counts as p = 1), with the families confirmed forward split off
+     at α/12 each ([ROADMAP](ROADMAP.md#research-calendar));
    - in-calendar survivors are scored once more in the lockbox with the same test (Holm
      across them), its unlock logged in the ledger before any result is seen.
 
@@ -145,11 +145,9 @@ their calibration. A family of resting bids held to settlement checks its coupli
 against the H1-shaped rows: its largest R̄ among its configurations, each on its own
 discovery positions and computed by the runner ([ROADMAP](ROADMAP.md#milestones) M3),
 must be at most some passing row's R; a family above every row's R needs a row at its R̄
-first. That is conservative where R̄ ≥ R (Coupling R: term by term for one side's
-positions on buckets, exactly for single contracts, and checked in the ladder row for
-strikes), and a row's R is a mean over the configurations its worlds selected. A family
-of resting bids trades standalone contracts only, unless a bucket or ladder maker row
-passes first.
+first. That is conservative where R̄ ≥ R (Coupling R, below), and a row's R is a mean
+over the configurations its worlds selected. A family of resting bids trades standalone
+contracts only, unless a bucket or ladder maker row passes first.
 
 ## Fill models
 
@@ -257,16 +255,16 @@ is about ten), and the dependence sample is the runner's (above). The worlds:
   alike, quoted at the boundary every time. The null prices each position at its
   snapshot's mid, so on one draw it nests a binary's or a strike's positions and slides
   a bucket's interval as its event's de-vigged prices move, while in truth they share
-  one outcome; Coupling R, below, measures the difference. One row takes H1's NO
-  cutoffs; the others the 20¢ cutoff alone, at the half spreads their labels show: with
-  all five, discovery most often selects 3¢ (about half the worlds), whose nearly
-  settled positions vary so little next to the null (its mids carry the half spread)
-  that their coupling barely registers. Two rows of the third table lower every ask, by
-  0.75¢ and, with a lasting shock, by 1¢. Limits: NO longshots only, not H1's YES
-  favorites configurations; a contract's 15 decisions compressed into one synthetic day;
-  and every cutoff decides at the same snapshots, so the pooled dependence sample keeps
-  one position per contract and snapshot, where H1's configurations decide at their own
-  first prints.
+  one outcome; Coupling R, below, measures the difference. One row takes H1's NO cutoffs
+  (half spread 1¢); the others the 20¢ cutoff alone, at the half spreads their labels
+  show: with all five, discovery most often selects 3¢ (about half the worlds), whose
+  nearly settled positions vary so little next to the null (its mids carry the half
+  spread) that their coupling barely registers. Two rows of the third table lower every
+  ask, by 0.75¢ and, with a lasting shock, by 1¢. Limits: NO longshots only, not H1's
+  YES favorites configurations; a contract's 15 decisions compressed into one synthetic
+  day; and every cutoff decides at the same snapshots, so the pooled dependence sample
+  keeps one position per contract and snapshot, where H1's configurations decide at
+  their own first prints.
 
 Coupling R, for one configuration's positions: the sum over the null's clusters of the
 variance at the boundary (each position winning with its break-even, given the earlier
@@ -279,19 +277,20 @@ P·P′, their probabilities then (for two buckets of an event, −P·P′). R t
 the world's truths: the coupling a row tests. A family knows only prices, so it uses R̄:
 the null's de-vigged intervals, every two-bucket term counted as 0. For one side's
 positions R̄ ≥ R term by term on buckets (the truth's term, −P·P′, is at most 0), and
-R̄ = R on single contracts; on strikes it isn't guaranteed (a strike bought as a
-longshot may be a favorite when a further one is bought), and the ladder row checks it.
-Above 1 the null understates the variance of what the test sums; below 1 it is
-conservative. Both count repeated positions, so positions per contract need no separate
-check. The run prints each row's R and R̄ where positions repeat, below the tables:
-means over its worlds of the selected configuration's (in a single-configuration row,
-that configuration's own).
+R̄ = R on single contracts; on strikes it isn't guaranteed (a strike bought as a longshot
+may be a favorite when a further one is bought), and the ladder row's worlds check it
+(on three of its worlds in `tests/test_validation_conformance.py`, and on average in the
+row's printed R and R̄). Above 1 the null understates the variance of what the test
+sums; below 1 it is conservative. Both count repeated positions, so positions per
+contract need no separate check. The run prints each row's R and R̄ where positions
+repeat, below the tables: means over its worlds of the selected configuration's (in a
+single-configuration row, that configuration's own).
 
 A procedure holds its size if, in every world without an edge, it finds one at most
 α + 2 Monte Carlo standard errors of the time, at α = 0.05 and at 0.05/12 (Holm's first
-step with 12 families). Cells are "% at α = 0.05 / % at 0.05/12"; bold is over the
-limit. ρ̂, cross-day and widening are the gauntlet's mean estimates and null widening;
-Romano–Wolf tests every configuration of the family, favorites included.
+step at m = 12). Cells are "% at α = 0.05 / % at 0.05/12"; bold is over the limit. ρ̂,
+cross-day and widening are the gauntlet's mean estimates and null widening; Romano–Wolf
+tests every configuration of the family, favorites included.
 
 | No-edge world | n | ρ̂ | cross-day | widening | naive in-sample | naive confirmation | null | bootstrap | null + bootstrap | null + DSR | null + DSR + PBO | Romano–Wolf | widened null | gauntlet |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|

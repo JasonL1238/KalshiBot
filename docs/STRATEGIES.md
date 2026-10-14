@@ -16,7 +16,7 @@ They motivate the hypotheses; they don't settle them.
 | H3 | Coherence / ladder arbitrage | Bucket mids can sum above $1 ([RESEARCH §2](RESEARCH.md)). Leg risk and fees decide whether this is exploitable |
 | H4 | Crypto/finance: taker lag against external prices | A short-dated crypto contract is a digital option on its settlement index ([RESEARCH §1](RESEARCH.md)). Polymarket added taker fees to its 15-minute crypto markets against latency arbitrage ([The Block](https://www.theblock.co/post/384461/polymarket-adds-taker-fees-to-15-minute-crypto-markets-to-fund-liquidity-rebates)) |
 | H5 | Weather | The market beats NBM by ~10% RMSE and an optimal blend of six forecasts by ~3% (7 cities, 7,590 city-days; [Crosier 2026](https://arxiv.org/html/2609.23969)). The edge vanished in Miami. A [pre-registered study](https://github.com/Nemesis-0/weather-prediction-market) found NBM added nothing beyond the 10 AM price |
-| H6 | Releases → markets still open | Kalshi's own release markets close before the release ([RESEARCH §1](RESEARCH.md)), so any lag is in related markets that stay open, such as Fed-path markets after a jobs report |
+| H6 | Releases → markets still open (dropped, below) | |
 | H7 | Polymarket ↔ Kalshi | Only ~6% of events overlap, rule wording differs, and capital is locked on both venues (unsourced, original notes) |
 | H8 | Deep resting orders that catch sweeps | Thin order flow causes temporary price deviations that pay liquidity providers ([Handa & Schwartz 1996](https://ideas.repec.org/a/bla/jfinan/v51y1996i5p1835-61.html)); against it, the permanent impact in the H2 row |
 | H9 | Decided outcomes, externally triggered | None found; our exploration only (below) |
@@ -61,7 +61,7 @@ H1's own choices; everything else is the pipeline's
 - **No path null:** positions are held to settlement.
 - **Smallest economically meaningful edge:** 0.5¢ net per contract (`min_edge`).
 - **Strata:** net PnL and positions by category are reported with the verdict, not
-  tested. (The category × hypothesis matrix comes with H2–H12.)
+  tested. (The category × hypothesis matrix comes with the other families.)
 - **Known at registration and not used** (later data, none informing H1's design):
   Kagan & Baiocchi (2026, calibration; data to mid-2026), Moshrefi
   ([arXiv 2607.14430](https://arxiv.org/abs/2607.14430), sports moneylines),
@@ -110,11 +110,11 @@ market catches up might pay, scoped from six research sweeps.
 Our own numbers here are **exploratory**: proxies rather than fill simulations, cut many
 ways, with thresholds picked after looking. They decide what to build first; they are
 not evidence. They come from discovery data (before 2025-11-26), with two exposures
-declared at registration: one sweep saw the outcome of the October 2025 payrolls
-release (KXPAYROLLS-25OCT, H6), and September 2026 crypto volumes were read outside the
-loader (H4, H11). Each design but H11's (there are no discovery books) is re-run as
-`research discover` configurations before it is registered, and the rest is disclosed
-then. Scripts and outputs:
+declared at registration: one sweep saw the outcome of the October 2025 payrolls release
+(KXPAYROLLS-25OCT: any family that trades it excludes it from its confirmation), and
+September 2026 crypto volumes were read outside the loader (H4, H11). Each design but
+H11's (there are no discovery books) is re-run as `research discover` configurations
+before it is registered, and the rest is disclosed then. Scripts and outputs:
 `data/exploration/2026-10-fast-strategies/` (local only).
 
 What these families share:
@@ -128,7 +128,7 @@ What these families share:
   round-trip accounting and a path null (the null's scope there); a configuration that
   buys both sides (possible in H3, H4, H8, H9 and H10) needs the mixed-side conformance
   world, and a maker family (H2, H8) the maker world and its registration checks
-  ([BACKTESTING](BACKTESTING.md) step 6 and the pre-registration list).
+  ([BACKTESTING](BACKTESTING.md) step 6 and the pre-registration paragraph).
 - **One mechanism per family** (BACKTESTING step 5), so m stays 12.
 - **H2 and H8:** Bartlett & O'Hara inform both, so S_h is 2026-03-12
   (`calendar.STUDY_END`), likely leaving them to forward tests
@@ -144,9 +144,14 @@ What these families share:
   level a sweep reaches, and "deep" was measured from the sweep's first fill, not from
   the touch when an order would have been placed.
 - **Testable** once its conformance worlds have run (the method's limits, above).
-- **Gate first:** all its evidence predates the end of market orders ([RESEARCH §1](RESEARCH.md)), which may
-  have made sweeps rarer. How to check that is the user's ruling
-  ([ROADMAP](ROADMAP.md#you-the-user)).
+- **Gate first:** all its evidence predates the end of market orders
+  ([RESEARCH §1](RESEARCH.md)), which may have made sweeps rarer. The check (user
+  ruling, 2026-10-14): before registration, count sweeps through its depths on forward
+  days (after 2026-09-30), reading no outcomes or PnL. The counts decide whether H8
+  registers as scoped (enough sweeps for power) or is re-scoped or dropped, and are
+  declared at registration. None of these days is in a window H8 could be tested on: its
+  confirmation and the lockbox end before the forward window, and a forward test would
+  start after registration (`calendar.py`).
 
 #### H9 decided outcomes, externally triggered
 - **Mechanism.** After an external trigger that the result is decided (ESPN end of
@@ -196,7 +201,6 @@ What these families share:
   likely needs a host near the exchange ([EXECUTION](EXECUTION.md), Hosting).
   In-calendar: Synth's report (Kalshi 15-minute BTC data to August 2026) is known and
   not used; if it were, H4 would go forward.
-- **H6:** jobs report → Fed-path markets, measured as an early exit, so it needs a path
-  null. The October 2025 release is excluded from its confirmation, since its outcome
-  was seen. With ~12 releases a year it expects to be Inconclusive; the user rules on
-  keeping it ([ROADMAP](ROADMAP.md#you-the-user)).
+- **H6: dropped** (user ruling, 2026-10-14). Jobs report → Fed-path markets has ~12
+  releases a year, so it was expected to be Inconclusive; its place stays in m
+  ([BACKTESTING](BACKTESTING.md) step 5).

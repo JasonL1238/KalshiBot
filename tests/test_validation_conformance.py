@@ -44,9 +44,9 @@ def test_a_small_world_yields_every_procedures_decision(kwargs):
     assert set(conformance.PROCEDURES) <= set(r)
     assert all(0 <= s["power_predicted"] <= 1 for s in results)
     if "depths" in kwargs:  # at the boundary, a contract to a cluster: R̄ = R
-        assert r["edge_per_position"] == 0 and r["coupling"] == r["coupling_bound"] > 0
+        assert r["edge_per_position"] == 0 and r["coupling"] == r["r_bar"] > 0
     else:  # R and R̄ wherever positions repeat
-        for key in ("coupling", "coupling_bound"):
+        for key in ("coupling", "r_bar"):
             assert (r[key] > 0) if "snapshots" in kwargs else math.isnan(r[key])
 
 
@@ -189,6 +189,12 @@ def test_coupling_is_exact_by_hand():
     ladder = [("K1", 3, 0, 0.0, 0.4, 0.6), ("K2", 3, 0, 0.0, 0.75, None),
               ("K1", 3, 1, 0.0, 0.45, None, 0.4), ("K2", 3, 1, 0.0, 0.7, 0.3, 0.6)]
     assert coupling(*ladder) == pytest.approx((0.77 / 0.69, 0.72 / 0.69))
+    # the same ladder as L1, L2: L1 bought as YES (2 contracts, break-even 0.4), L2 as NO
+    # (3), signed +2 and −3: R 4·0.24 + 9·0.21 − 2·6·0.16, R̄ the same with 0.135; the
+    # null 2.85 − 2·6·0.12
+    mixed = [("L1", 5, 0, 0.0, 0.4, 0.4, None, "yes", 2), ("L2", 5, 0, 0.0, 0.75, None),
+             ("L1", 5, 1, 0.0, 0.45, None, 0.4), ("L2", 5, 1, 0.0, 0.7, 0.3, 0.6, "no", 3)]
+    assert coupling(*mixed) == pytest.approx((0.93 / 1.41, 1.23 / 1.41))
     # one contract bought as NO (2 contracts), YES (1), then NO (1), signed −2, +1, −1:
     # 4·0.24 + 0.25 + 0.21 + 2·(−2·0.25 + 2·0.21 − 0.21) over the null's, nested,
     # 1.42 + 2·(−2·0.2 + 2·0.18 − 0.15)

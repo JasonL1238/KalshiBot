@@ -11,7 +11,7 @@ from kalshibot.research.validation import gauntlet, null, stats
 RNG = np.random.default_rng(3)
 
 
-def test_holm_runs_over_every_preregistered_family(monkeypatch):
+def test_holm_runs_over_every_place(monkeypatch):
     # at m = 12 the smallest p needs ≤ 0.05/12 ≈ 0.0042 and the next ≤ 0.05/11 ≈ 0.0045;
     # at m = 2, ≤ 0.025 and ≤ 0.05
     monkeypatch.setattr(calendar, "FORWARD", frozenset())
@@ -31,7 +31,7 @@ def test_a_forward_family_spends_only_its_own_share_of_alpha(monkeypatch):
     assert gauntlet.decide({"H1": 0.0042, "H2": 0.004}) == {
         "H1": False, "H2": True}  # 0.0042 > 0.05/12
     assert gauntlet.decide({"H2": 0.004}) == {"H2": True}  # H1 pending
-    monkeypatch.undo()  # the registered forward set: H1 and H5 leave 10 places
+    monkeypatch.undo()  # the registered forward set: H1, H5 and H11 leave 9 places
     with pytest.raises(ValueError, match="places"):
         gauntlet.decide({f"H{i}": 0.5 for i in (2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13)})
 
