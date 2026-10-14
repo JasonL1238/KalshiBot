@@ -10,6 +10,12 @@ dependencies = [
     "duckdb>=1.1",
     "httpx>=0.27",
     "nautilus_trader==1.230.0",
+    # NumPy 2.5 deprecated timedelta's generic unit, which pandas 2.3 (vectorbt 1.0.0 needs
+    # pandas < 3) uses for keyword and string Timedeltas. nautilus_trader (1.231.0 too) builds
+    # them when its backtest engine is imported, so the kalshibot command breaks on the NumPy
+    # release that makes this an error (2.7 at the earliest, per NEP 23). Cap numpy below that
+    # release, or migrate to pandas 3 and vectorbt >= 1.1 (untested here), where
+    # nautilus_trader doesn't warn.
     "numpy>=2.0",
     "pandas>=2.2",
     "plotly<7",  # vectorbt 1.0.0's plot templates name scattermapbox, which plotly 7 dropped
@@ -51,8 +57,9 @@ markers = [
 ]
 # A deprecation attributed to our own modules fails; one attributed to a dependency stays a
 # warning (each regex matches the start of a module name). A warning raised in compiled code
-# is attributed to its Python caller: under NumPy 2.5, pandas 2.3's pd.Timedelta(minutes=1)
-# and pd.Timedelta("1min") warn from our line, so write pd.Timedelta(1, unit="min").
+# is attributed to its Python caller: under NumPy >= 2.5 (see the numpy requirement), pandas
+# 2.3's pd.Timedelta(minutes=1) and pd.Timedelta("1min") warn from our line, so write
+# pd.Timedelta(1, unit="min").
 filterwarnings = [
     "error::DeprecationWarning:(kalshibot|test_|conftest)",
     "error::FutureWarning:(kalshibot|test_|conftest)",
