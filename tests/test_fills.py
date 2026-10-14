@@ -9,7 +9,7 @@ from hypothesis import strategies as st
 from kalshibot.research.backtest.fills import FILL_COLUMNS, maker_fills, taker_fills
 
 T0 = pd.Timestamp("2026-01-05 12:00:00", tz="UTC")
-S = lambda seconds: T0 + pd.Timedelta(seconds=seconds)  # noqa: E731
+S = lambda seconds: T0 + pd.Timedelta(seconds, unit="s")  # noqa: E731
 
 
 @pytest.fixture

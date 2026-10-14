@@ -169,8 +169,8 @@ def _coupling(pos: pd.DataFrame, quotes: pd.DataFrame) -> tuple[float, float]:
 
 
 def _daily(pos: pd.DataFrame, days: range) -> pd.Series:
-    return daily_returns(pos, BASE + pd.Timedelta(days=days.start),
-                         BASE + pd.Timedelta(days=days.stop))
+    return daily_returns(pos, BASE + pd.Timedelta(days.start, unit="D"),
+                         BASE + pd.Timedelta(days.stop, unit="D"))
 
 
 def _romano_wolf(conf: pd.DataFrame, configs: list, rng: np.random.Generator,

@@ -40,7 +40,7 @@ class BuyNoEachMorning:
         listed = data.markets(end).filter(
             f"created_time >= '{start}' AND ticker LIKE 'KXT-%' AND ticker NOT LIKE '%-B'"
         ).project("ticker").df()
-        rows = [(n, t, "no", pd.Timestamp(t.split("-", 1)[1], tz="UTC") + pd.Timedelta(
+        rows = [(n, t, "no", pd.Timestamp(t.split("-", 1)[1], tz="UTC") + timedelta(
             hours=9, minutes=59), config["count"], None) for n, t in enumerate(listed.ticker)]
         return pd.DataFrame(rows, columns=INTENT_COLUMNS)
 
@@ -63,8 +63,8 @@ class Candles:
     def get_candlesticks(self, ticker, start_ts, end_ts, period_interval, series_ticker):
         Candles.calls.append((ticker, start_ts))
         day = pd.Timestamp(ticker.split("-", 1)[1].removesuffix("-B"), tz="UTC")
-        at, (bid, ask) = ((day - pd.Timedelta(hours=15), ("0.8800", "0.9200"))
-                          if ticker.endswith("-B") else (day + pd.Timedelta(hours=9),
+        at, (bid, ask) = ((day - timedelta(hours=15), ("0.8800", "0.9200"))
+                          if ticker.endswith("-B") else (day + timedelta(hours=9),
                                                          ("0.0900", "0.1100")))
         ts = int(at.timestamp())
         return [] if not start_ts < ts <= end_ts else [{
@@ -202,7 +202,7 @@ def test_tier2_reports_after_the_verdict_and_again(market, monkeypatch):
         def intents(self, *args):
             mine = super().intents(*args)
             late = mine.assign(intent_id=mine["intent_id"] + len(mine), side="yes",
-                               decision_time=mine["decision_time"] + pd.Timedelta("31min"))
+                               decision_time=mine["decision_time"] + timedelta(minutes=31))
             return pd.concat([mine, late], ignore_index=True)
 
     for changed in (Fewer(), More()):
@@ -329,7 +329,7 @@ class RestingNo(BuyNoEachMorning):
 
     def intents(self, data, start, end, config):
         bids = super().intents(data, start, end, config)
-        return bids.assign(decision_time=bids["decision_time"] - pd.Timedelta(hours=12),
+        return bids.assign(decision_time=bids["decision_time"] - timedelta(hours=12),
                            limit=9500)
 
 
@@ -369,7 +369,7 @@ def test_maker_intents_rest_one_bid_per_contract_with_a_limit(market):
             bids = super().intents(*args)
             return pd.concat([bids, bids.assign(intent_id=bids["intent_id"] + len(bids),
                                                 decision_time=bids["decision_time"]
-                                                + pd.Timedelta(hours=1))], ignore_index=True)
+                                                + timedelta(hours=1))], ignore_index=True)
 
     with pytest.raises(ValueError, match="one bid per contract"):  # the runner checks
         run._fills(Twice(), market, Twice().configs()["one"], D0, D0 + timedelta(10))

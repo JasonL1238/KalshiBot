@@ -60,7 +60,7 @@ def test_sweep_fills_are_tier_ones():
     con = duckdb.connect()
     con.execute("SET TimeZone = 'UTC'")
     con.register("tape", pd.DataFrame({
-        "ticker": df["ticker"], "created_time": decided + pd.Timedelta(seconds=30),
+        "ticker": df["ticker"], "created_time": decided + pd.Timedelta(30, unit="s"),
         "yes_price": PRICE_SCALE - np.floor(df["bottom"]).astype("int64"),
         "count": 20 * SIZE_SCALE, "taker_side": "yes"}))  # a YES buyer sells NO down
     for config in conformance._configs("no", False, DEPTHS):

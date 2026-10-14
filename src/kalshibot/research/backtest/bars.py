@@ -30,7 +30,7 @@ from kalshibot.kalshi.models import MICROS, PRICE_SCALE, SIZE_SCALE
 from kalshibot.research.backtest.fills import no_fills
 from kalshibot.research.backtest.settle import charged_fee, settled, yes_payoff
 
-BAR = pd.Timedelta(minutes=1)
+BAR = pd.Timedelta(1, unit="min")
 
 
 def bars(intents: pd.DataFrame, trades: pd.DataFrame, markets: pd.DataFrame,

@@ -49,3 +49,11 @@ markers = [
     "data: needs local data under DATA_DIR/raw (auto-skipped when absent)",
     "slow: long-running simulation; skipped unless -m selects slow",
 ]
+# A deprecation attributed to our own modules fails; one attributed to a dependency stays a
+# warning (each regex matches the start of a module name). A warning raised in compiled code
+# is attributed to its Python caller: under NumPy 2.5, pandas 2.3's pd.Timedelta(minutes=1)
+# and pd.Timedelta("1min") warn from our line, so write pd.Timedelta(1, unit="min").
+filterwarnings = [
+    "error::DeprecationWarning:(kalshibot|test_|conftest)",
+    "error::FutureWarning:(kalshibot|test_|conftest)",
+]
