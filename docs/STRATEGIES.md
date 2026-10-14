@@ -68,6 +68,27 @@ H1's own choices; everything else is the pipeline's
   Le ([arXiv 2602.19520](https://arxiv.org/abs/2602.19520), calibration), Delvecchio
   (2026 thesis).
 
+Discovery (2026-10-14, `ledger/H1.jsonl`; selection only, not a verdict): every
+configuration loses net of fees, from −0.20¢ a position (NO at YES ≤ 20¢, which discovery
+selects by Sharpe) to −2.32¢ (YES at YES ≥ 80¢); NO at YES ≤ 10–20¢ are positive before
+fees (+0.2¢ to +0.6¢) and lose to the fee. Two investigations found no bug affecting the
+result: a rerun of the runner's pieces reproduced two configurations exactly, and an
+independent rebuild matched all nine to within 4 positions and about 0.04¢ a position
+(`data/exploration/2026-10-h1-discovery/`, local only).
+
+The [positive control](BACKTESTING.md#positive-control) doesn't contradict these losses.
+Its longshot loss is the favorite makers' gain: NO makers opposite YES takers at 0–5¢
+gained 1.15¢ a contract, of which a NO taker paying the ask (95–100¢) got about a third
+over all maturities (+0.43¢) and nothing near expiry. Its favorites' small gain, weighted
+by contract, came mostly from far-dated markets, while H1 buys one contract a position
+near expiry. The 15-day hold left out 24–37% of the favorite decisions, so the
+registration's "nearly all volume" did not hold (36% of discovery's settled-binary
+contracts traded more than 15 days before their latest expiration), and near-expiry
+favorites lost per trade from 2024 on. No fill variant tried (including the deciding
+print's own price, a ±2¢ band, any print size and no limit) makes any configuration
+profitable; how far below the deciding print Tier 1 filled:
+[BACKTESTING](BACKTESTING.md#fill-models).
+
 ## Hypothesis notes
 
 ### H5 weather

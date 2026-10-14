@@ -35,6 +35,7 @@ class FavoriteLongshot:
                 config: dict[str, Any]) -> pd.DataFrame:
         buy, threshold = config["buy"], config["yes_price"]
         past = f"yes_price {'<=' if buy == 'no' else '>='} {threshold}"
+        # trade_id is a random UUID: a tie within an instant can pick any level of a sweep
         first = data.trades(start, end).query("t", f"""
             SELECT ticker, created_time AS decision_time, yes_price FROM t
             WHERE {past} AND NOT coalesce(is_block_trade, FALSE)

@@ -12,7 +12,7 @@ Hypotheses and verdicts: [docs/STRATEGIES.md](../../../docs/STRATEGIES.md).
 | `quotes.py` | The null's prices and draws: mids from 1-minute candles, for every market of an exclusive event or the contract alone, searched for a day at a time (`needed`, `mids`); strike ladders read off Kalshi's tickers |
 | `run.py` | The research runner: `discover` (every configuration, recorded), `fetch_candles` (what the null prices from), `confirm` (the family's one confirmation test, with its power and strata), `report` (Tier 2 on it) |
 | `backtest/` | Tier 1 (`fills.py`, `settle.py`: every verdict) and the Tier-2 engines (model uncertainty) |
-| `backtest/fills.py` | Conservative fill rules from the trade tape (taker: next same-side print; maker: strict trade-through, one fill per sweep); the fill schema |
+| `backtest/fills.py` | Fill rules from the trade tape (taker: next same-side print; maker: strict trade-through, one fill per sweep); the fill schema |
 | `backtest/settle.py` | Net PnL per fill (costliest plausible fee regime, its own rounding or the fee rate itself; settlement value, including scalar results, or a mark at window end) and daily returns on one calendar |
 | `backtest/replay.py` | Tier 2: NautilusTrader replays the tape and fills taker intents its own way; returns fills plus its own PnL |
 | `backtest/bars.py` | Tier 2: vectorbt fills taker intents at 1-minute bar closes; returns fills plus its own PnL |

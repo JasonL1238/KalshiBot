@@ -18,7 +18,7 @@ except what M3 fixes per family before its own confirmation test (the last list 
    are evaluated only by `research/run.py`, which logs every trial in the ledger and
    keeps a decision only if its position must settle inside its window (the calendar
    rules).
-3. **Tier 1, the verdicts.** `fills.py` fills intents conservatively from the tape, in
+3. **Tier 1, the verdicts.** `fills.py` fills intents from the tape (Fill models), in
    whole contracts, and `settle.py` prices each fill with the costliest fee regime that
    could have applied, pays settled markets their settlement value, and marks open
    positions at the executable bid at window end (at zero until window-end bids are
@@ -162,7 +162,14 @@ On the test tape, a 10-contract YES buy decided at 00:00:30 fills at 43¢ in Tie
 market whose last print was minutes earlier fills at that stale price in both engines and
 not at all in Tier 1. NautilusTrader makers aren't replayed: on a book made of prints, a
 resting bid at the last price fills completely at the next event of any kind. The engines
-do what typical backtests on trade data do; Tier 1 is deliberately harsher.
+do what typical backtests on trade data do; Tier 1 is deliberately harsher about stale
+prints.
+
+Tier 1's taker fill is capped by the intent's limit but has no floor, so the next
+same-side print, up to `max_wait` later, can come far below the ask at decision time: in
+H1's discovery, a third of YES ≥ 80¢ fills came more than 2¢ below the deciding print,
+21¢ below on average. Holding it near the decision-time ask is planned
+([ROADMAP](ROADMAP.md#milestones) M3).
 
 ## Engine screen (2026-10-08)
 

@@ -55,6 +55,10 @@ exchange. Whether it makes money is a result to measure, not an assumption.
     (`quotes.needed` and `mids` fetch them; a contract settled by t_j counts 0); buckets
     need none. A bucket-heavy H1's R̄ may exceed every planned row's R, and then a
     higher-coupling row runs first, as the rule says.
+  - Tier-1 taker fills held near the decision-time ask, as a real IOC order fills (a floor
+    as well as the limit, and a shorter wait; [BACKTESTING](BACKTESTING.md#fill-models)):
+    `fills.py`'s default for families registered after the change. H1 keeps the rule it
+    registered with.
   - Round-trip accounting and a path null for families that exit before settlement,
     chosen in conformance first (candidates: [BACKTESTING](BACKTESTING.md)).
   - A recorded-stretch selection window in `calendar.py` and `run.py` for families

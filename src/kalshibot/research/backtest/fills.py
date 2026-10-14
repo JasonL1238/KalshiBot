@@ -1,13 +1,15 @@
 """Fill rules: which hypothetical orders would have filled, when, at what price.
 
 Only the trade tape exists historically (no order books), so fills are inferred from
-prints, conservatively:
+prints, and a stale print never fills an order. The rules:
 
 - Taker (`taker_fills`): the order fills at the first print after `decision_time +
   latency`, and within `max_wait` of it, in which a taker bought the same contract. That
   print shows the ask then (in a sweep, the lowest of the prices printed at that
   instant). Size is capped at `participation` × that print's size. The signal's own
-  print can't fill it, because the latency puts the fill strictly later.
+  print can't fill it, because the latency puts the fill strictly later. The order fills
+  only at or under its limit, with no floor, so the print can be well below the ask
+  at decision time (docs/BACKTESTING.md, Fill models).
 - Maker (`maker_fills`): a resting bid fills only when later prints trade *through* its
   price, strictly below it for the contract bought. Being at the touch isn't enough,
   because queue position is unknown. Each sweep (one instant's prints by takers selling
