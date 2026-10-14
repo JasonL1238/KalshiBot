@@ -12,6 +12,7 @@ dependencies = [
     "nautilus_trader==1.230.0",
     "numpy>=2.0",
     "pandas>=2.2",
+    "plotly<7",  # vectorbt 1.0.0's plot templates name scattermapbox, which plotly 7 dropped
     "pyarrow>=16",
     "python-dotenv>=1.0",
     "scikit-learn>=1.5",

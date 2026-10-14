@@ -217,10 +217,14 @@ def test_imported_names_resolves_nested_and_relative_imports():
 
 def test_runtime_dependencies_match_imports():
     import tomllib
-    from importlib.metadata import packages_distributions
+    from importlib.metadata import packages_distributions, requires
 
-    declared = {re.split(r"[<>=!~\[ ]", d)[0].lower().replace("_", "-") for d in tomllib.loads(
-        (ROOT / "pyproject.toml").read_text())["project"]["dependencies"]}
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
+
+    specs = {canonicalize_name(r.name): r for r in map(Requirement, tomllib.loads(
+        (ROOT / "pyproject.toml").read_text())["project"]["dependencies"])}
+    declared = set(specs)
     dists = packages_distributions()
     used = set()
     for path in (ROOT / "src").rglob("*.py"):
@@ -229,11 +233,17 @@ def test_runtime_dependencies_match_imports():
             top = name.split(".")[0]
             if top in sys.stdlib_module_names or top == "kalshibot" or top not in dists:
                 continue
-            owners = {d.lower().replace("_", "-") for d in dists[top]}
+            owners = {canonicalize_name(d) for d in dists[top]}
             assert owners & declared, (
                 f"{path.relative_to(ROOT)} imports {top}, which pyproject.toml doesn't declare")
             used |= owners
-    assert declared <= used, f"declared but never imported: {sorted(declared - used)}"
+    # an unimported dependency may stay only as a version cap on another's requirement
+    required = {canonicalize_name(r.name) for d in declared
+                for r in map(Requirement, requires(d) or [])
+                if r.marker is None or r.marker.evaluate({"extra": ""})}
+    unused = {d for d in declared - used if d not in required
+              or not any(s.operator in ("<", "<=", "==") for s in specs[d].specifier)}
+    assert not unused, f"declared but never imported: {sorted(unused)}"
 
 
 @pytest.mark.parametrize("package, forbidden", LAYERS.items())
