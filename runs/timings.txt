@@ -11,3 +11,4 @@ slice 9 rc=0 wall=464s
 slice 10 rc=0 wall=231s
 slice 11 rc=0 wall=7339s
 slice 11 push failed
+power rc=0 wall=12715s
