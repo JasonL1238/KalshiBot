@@ -8,3 +8,5 @@ baseline-makers-0.25 rc=0 wall=3782s args=0.25 --only makers:
 baseline-power-makers-0.25 rc=0 wall=628s args=power 0.25 --only makers:
 one_interval-makers-0.25 rc=0 wall=3777s args=0.25 --only makers: --makers one_interval
 one_interval-power-makers-0.25 rc=0 wall=621s args=power 0.25 --only makers: --makers one_interval
+exact-makers-0.25 rc=0 wall=3865s args=0.25 --only makers: --makers exact
+exact-power-makers-0.25 rc=0 wall=680s args=power 0.25 --only makers: --makers exact
