@@ -24,6 +24,13 @@ def test_one_tape_in_fixed_point_units(loader):
     assert loader.trades(D(2025, 10, 1), D(2025, 10, 1)).df().empty  # an empty range
 
 
+def test_relations_stay_lazy(loader):
+    """A materialized relation (DuckDB's for any query with parameters) scans a column
+    buffer; a lazy one scans the files, so callers' filters reach them."""
+    relations = (loader.markets(D(2025, 10, 15)), loader.trades(D(2025, 9, 29), D(2025, 10, 11)))
+    assert all("COLUMN_DATA_SCAN" not in r.filter("ticker = 'A'").explain() for r in relations)
+
+
 def test_missing_and_unfinished_days_raise(loader):
     with pytest.raises(MissingData):
         loader.trades(D(2025, 10, 1), D(2025, 10, 13))

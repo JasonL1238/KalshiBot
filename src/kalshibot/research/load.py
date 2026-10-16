@@ -15,6 +15,7 @@ look-ahead rules are enforced in one place:
 - Markets listed after `as_of` don't exist yet. Post-hoc columns (known only once the
   market settles: `result`, `volume`, a `close_time` that moves on early close, ...) are
   NULL unless it settled before `as_of`.
+- Relations are lazy: each execution reads the files then, so narrow them before `.df()`.
 """
 
 from __future__ import annotations
@@ -98,10 +99,9 @@ class Loader:
         if not days:
             return self._con.from_arrow(TRADE_SCHEMA.empty_table())
         return self._con.sql(
-            "SELECT * FROM read_parquet($api, hive_partitioning = false) "
-            "WHERE created_time >= $start AND created_time < $end",
-            params={"api": [str(trades_path(self._kalshi, d)) for d in days],
-                    "start": start, "end": end})
+            f"SELECT * FROM read_parquet({_sql([trades_path(self._kalshi, d) for d in days])}, "
+            f"hive_partitioning = false) WHERE created_time >= {_sql(start)} "
+            f"AND created_time < {_sql(end)}")
 
     def _candle_paths(self, wanted: pd.DataFrame) -> list[Path]:
         return [candles_path(self._kalshi, t, pd.Timestamp(d).date())
@@ -125,37 +125,34 @@ class Loader:
                               "fetch them with research.run.fetch_candles")
         if not paths:
             return self._con.from_arrow(CANDLE_SCHEMA.empty_table())
-        return self._con.sql("SELECT * FROM read_parquet($p, hive_partitioning = false)",
-                             params={"p": [str(p) for p in paths]})
+        return self._con.sql(
+            f"SELECT * FROM read_parquet({_sql(paths)}, hive_partitioning = false)")
 
     def markets(self, as_of: datetime) -> duckdb.DuckDBPyRelation:
         """Markets listed by `as_of`, with their series and category; post-hoc columns are
         NULL unless the market settled before `as_of`. Every market has a series
         (`SERIES`)."""
-        as_of = _utc(as_of)
-        known = "m.settlement_ts < $as_of"
+        cutoff = _sql(as_of)
+        known = f"m.settlement_ts < {cutoff}"
         if not self._lockbox_open():  # lockbox-era outcomes stay hidden
-            known += " AND NOT (m.settlement_ts >= $lock_start AND m.settlement_ts < $lock_end)"
+            known += (f" AND NOT (m.settlement_ts >= {_sql(LOCKBOX_START)} "
+                      f"AND m.settlement_ts < {_sql(FORWARD_START)})")
         cols = ([f"m.{c}" for c in AS_LISTED]
                 + [f"CASE WHEN {known} THEN m.{c} END AS {c}" for c in POST_HOC]
                 + [f"{SERIES} AS series_ticker", "s.category", "e.mutually_exclusive"])
         return self._con.sql(
-            f"SELECT {', '.join(cols)} FROM read_parquet($markets) m "
-            "LEFT JOIN read_parquet($events) e USING (event_ticker) "
-            f"LEFT JOIN read_parquet($series) s ON s.series_ticker = {SERIES} "
-            "WHERE m.created_time < $as_of",
-            params={"as_of": as_of, "markets": self._parquet("markets"),
-                    "events": self._parquet("events"), "series": self._parquet("series"),
-                    **({} if self._lockbox_open() else
-                       {"lock_start": LOCKBOX_START, "lock_end": FORWARD_START})})
+            f"SELECT {', '.join(cols)} FROM read_parquet({_sql(self._parquet('markets'))}) m "
+            f"LEFT JOIN read_parquet({_sql(self._parquet('events'))}) e USING (event_ticker) "
+            f"LEFT JOIN read_parquet({_sql(self._parquet('series'))}) s "
+            f"ON s.series_ticker = {SERIES} WHERE m.created_time < {cutoff}")
 
     def fetched(self) -> datetime | None:
         """When the markets and events tables were fetched (their oldest row; None if
         either is empty): outcomes after this aren't in them yet."""
         return self._con.sql(
             "SELECT least(min(m), min(e)) FROM (SELECT min(fetched_at) AS m FROM "
-            "read_parquet($m)), (SELECT min(fetched_at) AS e FROM read_parquet($e))",
-            params={"m": self._parquet("markets"), "e": self._parquet("events")}).fetchone()[0]
+            f"read_parquet({_sql(self._parquet('markets'))})), (SELECT min(fetched_at) AS e "
+            f"FROM read_parquet({_sql(self._parquet('events'))}))").fetchone()[0]
 
     def fingerprint(self, windows: list[tuple[datetime, datetime]],
                     candles: pd.DataFrame | None = None) -> str:
@@ -177,10 +174,22 @@ class Loader:
 
     def fee_schedule(self) -> FeeSchedule:
         log = self._con.sql("SELECT series_ticker, scheduled_ts, fee_type, fee_multiplier "
-                            "FROM read_parquet($p)", params={"p": self._parquet("fee_changes")})
+                            f"FROM read_parquet({_sql(self._parquet('fee_changes'))})")
         series = self._con.sql("SELECT series_ticker, fee_type, fee_multiplier, category "
-                               "FROM read_parquet($p)", params={"p": self._parquet("series")})
+                               f"FROM read_parquet({_sql(self._parquet('series'))})")
         return FeeSchedule(log.fetchall(), {s: (t, m, c) for s, t, m, c in series.fetchall()})
+
+
+def _sql(value: datetime | str | Path | list) -> str:
+    """A SQL literal for a UTC time, a path or a list of paths. DuckDB runs a query with
+    parameters at once and keeps its whole result; with literals a relation stays lazy, so
+    the projections, filters and joins callers add run as one streamed query over the
+    Parquet files."""
+    if isinstance(value, list):
+        return f"[{', '.join(_sql(v) for v in value)}]"
+    if isinstance(value, datetime):
+        return f"TIMESTAMPTZ '{_utc(value).isoformat()}'"
+    return "'" + str(value).replace("'", "''") + "'"
 
 
 def _utc(ts: datetime) -> datetime:
