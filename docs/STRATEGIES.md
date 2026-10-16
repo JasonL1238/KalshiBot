@@ -108,8 +108,17 @@ Venue and data facts (settlement source, climate day, bucket math, free sources)
   - thinner cities.
 - **Left out:** trading on observations alone (in our exploration, buckets already
   ruled out by the afternoon daily summary kept trading for hours, but the pool is
-  tiny), and maker quotes (makers pay nothing on KXHIGHNY, [RESEARCH §1](RESEARCH.md)),
-  which need recorded books to judge.
+  tiny), and quoting at the book's touch (makers pay nothing on KXHIGHNY,
+  [RESEARCH §1](RESEARCH.md)), which needs recorded books to judge.
+- **Parked:** NO bids at or up to 2¢ below the NO price a YES taker last hit, gated on
+  trailing taker imbalance (exploration, 2026-10-15;
+  `data/exploration/2026-10-weather-maker/`, local only). Judged from prints, with
+  Tier-1 maker fills (a later sweep must trade through the bid) and no maker fee, on the
+  eight daily-high cities' discovery tape, and by a keep/park rule fixed in advance and
+  read on cells pooled across cities, no non-empty cell made money: on the six-bucket
+  ladders of 2023 on, cells netted −2.2¢ to −0.1¢ a fill, and the YES-heavy decile it
+  was meant for −1.5¢ to −0.6¢ (2021–22's irregular events make every cell worse). The
+  YES takers who filled such bids were right more often than their price.
 - **Model:** predict a distribution, not a point:
   - [EMOS](https://doi.org/10.1175/MWR2904.1) (Normal with learned mean/variance,
     fit by minimizing CRPS);
