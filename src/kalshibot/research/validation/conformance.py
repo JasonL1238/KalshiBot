@@ -37,7 +37,9 @@ and prints the two tables in docs/BACKTESTING.md, then R and R̄ (`_coupling`) o
 whose positions repeat; append rows only, since each row is seeded by its position.
 `... conformance power` checks `gauntlet.power`, the estimate behind an Inconclusive
 verdict, against the gauntlet's measured power (`PREDICTION_GRID`).
-`--only <prefix>` runs only the rows whose label starts with it (e.g. "makers:").
+`--only <prefix>` runs only the rows whose label starts with it (e.g. "makers:");
+`--makers <method>` sets `Gates.makers` (`gauntlet.MAKER_METHODS`), which changes only
+maker rows.
 """
 
 from __future__ import annotations
@@ -103,7 +105,7 @@ def _positions(df: pd.DataFrame, config: tuple[str, str, int]) -> pd.DataFrame:
         pos["expected"] = synthetic.taker_net(pos["q"] if side == "yes" else 1 - pos["q"], ask)
     pos["priced_at"] = pos["fill_time"] = _priced_at(pos)
     pos["close_time"] = BASE + pd.to_timedelta(pos["day"] + 1, unit="D")  # the day's end
-    pos["side"], pos["fill_count"] = side, SIZE_SCALE
+    pos["side"], pos["fill_count"], pos["maker"] = side, SIZE_SCALE, "bottom" in df
     pos["won"] = pos["yes"] if side == "yes" else ~pos["yes"]
     pos["pnl"] = np.where(pos["won"], PRICE_SCALE * SIZE_SCALE, 0) - pos["cost"]
     return pos
@@ -399,25 +401,29 @@ POWER_HEADER = ("| Edge world | true net edge per position | positions/day | "
                 + " | ".join(POWER_COLUMNS) + " |")
 
 
-def _rows(grid: list, scale: float, seed: int = 0, only: str = "", **extra):
+def _rows(grid: list, scale: float, seed: int = 0, only: str = "", makers: str = "",
+          **extra):
     """(label, worlds, settings, `one_world` results) for each row of a grid whose label
-    starts with `only`, in order, each row seeded by its position in the grid."""
+    starts with `only`, in order, each row seeded by its position in the grid; with
+    `makers`, under that `Gates.makers` (it changes only maker rows)."""
     for i, (label, worlds, kwargs) in enumerate(grid):
         if not label.startswith(only):
             continue
+        if makers:
+            kwargs = {**kwargs, "gates": replace(kwargs.get("gates", GATES), makers=makers)}
         n = max(20, int(worlds * scale))
         yield label, n, kwargs, simulate(n, seed=seed + i, **extra, **kwargs)
         print(f"{label}: done", file=sys.stderr, flush=True)
 
 
-def report(scale: float = 1.0, only: str = "") -> str:
+def report(scale: float = 1.0, only: str = "", makers: str = "") -> str:
     """The size and power tables in docs/BACKTESTING.md, from `GRID` (`scale` shrinks it;
     `only`, see `_rows`), then the mean `_coupling` of each row whose positions repeat
-    (makers, H1-shaped)."""
+    (makers, H1-shaped). `makers`: see `_rows`."""
     size = [SIZE_HEADER, "|---|---|---|---|---|" + "---|" * len(PROCEDURES)]
     power = [POWER_HEADER, "|---|---|---|" + "---|" * len(POWER_COLUMNS)]
     coupling = []
-    for label, n, kwargs, results in _rows(GRID, scale, only=only):
+    for label, n, kwargs, results in _rows(GRID, scale, only=only, makers=makers):
         by_alpha = {a: rates(results, a) for a in (GATES.alpha, GATES.level)}
         r = by_alpha[GATES.alpha]
         if not math.isnan(r["coupling"]):  # positions repeat (NaN if a world has none)
@@ -478,16 +484,16 @@ def _calibration(results: list[dict[str, float]]) -> str:
     return f"**{text}**" if gap.mean() > 2 * gap.std(ddof=1) / np.sqrt(len(gap)) else text
 
 
-def prediction_report(scale: float = 1.0, only: str = "") -> str:
+def prediction_report(scale: float = 1.0, only: str = "", makers: str = "") -> str:
     """The predicted-vs-measured power table in docs/BACKTESTING.md: `gauntlet.power`'s
     estimate, made as `confirm` makes it with conformance's draws, against how often the
     gauntlet found the edge, both at α/m; again over the worlds whose cross-day estimate
     is negative, where a per-day error would show (`gauntlet.power`). Synthetic positions
     settle on the day they are priced, so this doesn't measure the stand-in `confirm` uses for
-    later settlement. `only`: see `_rows`."""
+    later settlement. `only`, `makers`: see `_rows`."""
     rows = [PREDICTION_HEADER, "|---|---|---|---|---|"]
     for label, _, _, results in _rows(PREDICTION_GRID, scale, seed=1000, only=only,
-                                      predict=True):
+                                      makers=makers, predict=True):
         r, tilted = rates(results), [s for s in results if s["cross_day"] < 0]
         rows.append(f"| {label} | {r['edge_per_position'] / CENT:+.2f}¢ | "
                     f"{r['widening']:.2f} | {_calibration(results)} | "
@@ -496,11 +502,13 @@ def prediction_report(scale: float = 1.0, only: str = "") -> str:
 
 
 if __name__ == "__main__":
-    args, only = sys.argv[1:], ""
-    if "--only" in args:
-        at = args.index("--only")
-        only, args = args[at + 1], args[:at] + args[at + 2:]
+    args, options = sys.argv[1:], {"--only": "", "--makers": ""}
+    for flag in options:
+        if flag in args:
+            at = args.index(flag)
+            options[flag], args = args[at + 1], args[:at] + args[at + 2:]
+    only, makers = options["--only"], options["--makers"]
     if args[:1] == ["power"]:
-        print(prediction_report(float(args[1]) if len(args) > 1 else 1.0, only))
+        print(prediction_report(float(args[1]) if len(args) > 1 else 1.0, only, makers))
     else:
-        print(report(float(args[0]) if args else 1.0, only))
+        print(report(float(args[0]) if args else 1.0, only, makers))

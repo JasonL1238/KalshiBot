@@ -266,3 +266,40 @@ def test_simulated_totals_match_one_big_draw():
                              np.random.default_rng(1))
     whole = null.recentered_pnl(yes, args["buy_yes"], args["count"], args["p_yes"])
     assert np.allclose(chunked, whole)
+
+
+def test_exact_boundary_variance_of_fills_on_one_outcome_by_hand():
+    """Three NO fills on one contract, out of time order: each later one covaries with
+    every earlier one by its own variance, v(1 − v) at the larger of its two win
+    probabilities."""
+    args = {"buy_yes": np.zeros(3, bool), "count": np.array([1.0, 2.0, 1.0]),
+            "p_yes": np.array([0.2, 0.3, 0.1]), "lo": np.zeros(3),
+            "hi": np.array([0.2, 0.3, 0.1]), "cluster": np.zeros(3, int),
+            "day": np.zeros(3, int), "break_even": np.array([0.85, 0.6, 0.9])}
+    order = np.array([2, 0, 1])  # the second fill first, then the third, then the first
+    v = np.maximum((1 - args["p_yes"]) * args["p_yes"],
+                   args["break_even"] * (1 - args["break_even"]))
+    s = -args["count"]
+    by_hand = (v[1] * s[1] ** 2 + v[2] * s[2] * (s[2] + 2 * s[1])
+               + v[0] * s[0] * (s[0] + 2 * (s[1] + s[2])))
+    exact = null._clusters(**args, exact=np.ones(3, bool), order=order)
+    assert exact["var_b"].iloc[0] == pytest.approx(by_hand)
+    assert null._clusters(**args)["var_b"].iloc[0] < by_hand  # nested intervals understate
+    partly = null._clusters(**args, exact=np.array([True, True, False]), order=order)
+    assert partly["var_b"].iloc[0] == null._clusters(**args)["var_b"].iloc[0]  # whole only
+
+
+def test_dependence_can_centre_surprises_elsewhere():
+    """Centred at the null's own probabilities, `centre` changes nothing."""
+    one = surprises(100, 10, 0.3, RNG)
+    own = np.where(one["buy_yes"], one["p_yes"], 1 - one["p_yes"])
+    assert null.dependence(**one, centre=own) == null.dependence(**one)
+
+
+def test_exact_needs_no_order_beside_other_clusters():
+    """Fills as given; a cluster without maker fills keeps its nested variance."""
+    args = {"buy_yes": np.zeros(3, bool), "count": np.ones(3), "p_yes": np.full(3, 0.2),
+            "lo": np.zeros(3), "hi": np.full(3, 0.2), "cluster": np.array([0, 0, 1]),
+            "day": np.zeros(3, int), "break_even": np.full(3, 0.8)}
+    exact = null._clusters(**args, exact=np.array([True, True, False]))
+    assert exact["var_b"].to_numpy() == pytest.approx([4 * 0.16, 0.16])

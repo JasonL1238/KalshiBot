@@ -15,7 +15,7 @@ selection, reported with every verdict.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pandas as pd
@@ -35,6 +35,12 @@ class Gates:
     dependence_days: int = 400  # the dependence estimates use discovery's last decision days
     power_worlds: int = 1_000  # simulated confirmations behind a power estimate
     power_resamples: int = 2_000  # bootstrap draws in each
+    # how the null couples a resting bid's fills on one contract (MAKER_METHODS)
+    makers: str = "nested"
+
+    def __post_init__(self):
+        if self.makers not in MAKER_METHODS:
+            raise ValueError(f"makers must be one of {MAKER_METHODS}: {self.makers!r}")
 
     @property
     def level(self) -> float:
@@ -42,6 +48,9 @@ class Gates:
         return self.alpha / self.families
 
 
+# docs/BACKTESTING.md, step 6: the null's nested intervals, then the candidates for a
+# maker's fills (`_for_makers`, `null._clusters`' exact, `null.dependence`'s centre)
+MAKER_METHODS = ("nested", "one_interval", "exact", "centred")
 PREREGISTERED = Gates()
 
 
@@ -60,16 +69,33 @@ class Positions:
     hi: np.ndarray
     cluster: np.ndarray  # integer cluster ids (`null.inputs`)
     day: np.ndarray  # settlement day: integer UTC days, as settle.close_day
+    maker: np.ndarray | None = None  # True: a resting bid's fill (`Gates.makers`); None: none
+    order: np.ndarray | None = None  # when each is priced, for ordering fills; None: as given
 
     @classmethod
     def from_frame(cls, df: pd.DataFrame) -> Positions:
         """From one row per position: pnl, paid, won, side ('yes' | 'no'), fill_count,
-        p_yes, lo, hi, cluster, day."""
+        p_yes, lo, hi, cluster, day, and optionally maker (the fill schema's), ticker and
+        priced_at. A family of resting bids trades standalone contracts, so maker fills
+        on several contracts of one cluster (an event's buckets, a ladder's strikes) are
+        refused: the maker methods treat a cluster's fills as sharing one outcome."""
+        if "maker" in df and "ticker" in df and df["maker"].any():
+            spans = df[df["maker"].astype(bool)].groupby("cluster")["ticker"].nunique()
+            if (spans > 1).any():
+                raise ValueError("maker fills on several contracts of one cluster: a family "
+                                 "of resting bids trades standalone contracts only")
         return cls(net_pnl=df["pnl"].to_numpy(), paid=df["paid"].to_numpy(),
                    won=df["won"].to_numpy(float), buy_yes=(df["side"] == "yes").to_numpy(),
                    count=df["fill_count"].to_numpy(), p_yes=df["p_yes"].to_numpy(),
                    lo=df["lo"].to_numpy(), hi=df["hi"].to_numpy(),
-                   cluster=df["cluster"].to_numpy(), day=df["day"].to_numpy())
+                   cluster=df["cluster"].to_numpy(), day=df["day"].to_numpy(),
+                   maker=df["maker"].to_numpy(bool) if "maker" in df else None,
+                   order=(pd.to_datetime(df["priced_at"]).astype("int64").to_numpy()
+                          if "priced_at" in df else None))
+
+    @property
+    def makes(self) -> bool:
+        return self.maker is not None and bool(self.maker.any())
 
     @property
     def break_even(self) -> np.ndarray:
@@ -130,7 +156,7 @@ def evaluate(discovery: pd.DataFrame, discovery_positions: Positions,
     `gates.dependence_days` (`pooled`), all settled before confirmation, for the
     dependence estimates. `confirmation_returns` and `positions` belong to
     `select(discovery)` on confirmation."""
-    d, p = discovery_positions, positions
+    d, p = (_for_makers(x, gates) for x in (discovery_positions, positions))
     for both in (d, p):
         both.check()
     if len(d.day) and len(p.day) and d.day.max() >= p.day.min():
@@ -155,13 +181,48 @@ def _null(d: Positions, p: Positions, rng: np.random.Generator, gates: Gates
           ) -> tuple[null.Dependence, float, np.ndarray]:
     """The dependence estimated on discovery positions `d`, the widening it implies for
     confirmation positions `p`, and `p`'s null totals (not yet widened)."""
+    terms = _exact(d, gates)
+    if gates.makers == "centred" and d.makes:
+        terms["centre"] = np.where(d.maker, d.break_even,
+                                   np.where(d.buy_yes, d.p_yes, 1 - d.p_yes))
     dep = null.dependence(d.won, d.buy_yes, d.count, d.p_yes, d.lo, d.hi, d.cluster, d.day,
-                          d.break_even)
+                          d.break_even, **terms)
     widen = null.widening(dep, p.buy_yes, p.count, p.p_yes, p.lo, p.hi, p.cluster, p.day,
-                          p.break_even)
+                          p.break_even, **_exact(p, gates))
     return dep, widen, null.simulate_totals(p.lo, p.hi, p.cluster, p.buy_yes, p.count,
                                             p.p_yes, gates.draws, rng)
 
+
+def _for_makers(p: Positions, gates: Gates) -> Positions:
+    """`p` as the null sees it under `gates.makers`: with "one_interval", every maker
+    fill on a contract shares one interval (`_one_interval`), so they settle alike."""
+    if gates.makers != "one_interval" or not p.makes:
+        return p
+    lo, hi = _one_interval(p.lo, p.hi, p)
+    return replace(p, lo=lo, hi=hi, p_yes=np.where(p.maker, hi - lo, p.p_yes))
+
+
+def _one_interval(lo: np.ndarray, hi: np.ndarray, p: Positions
+                  ) -> tuple[np.ndarray, np.ndarray]:
+    """(lo, hi) with each cluster's maker fills on one interval [0, P̄), P̄ their
+    count-weighted mean YES probability, so their null expectation sums as before. A
+    family of resting bids trades standalone contracts (one per cluster), anchored at 0."""
+    rows = p.maker
+    if (lo[rows] != 0).any():
+        raise ValueError("one interval per contract needs standalone contracts, on [0, P)")
+    weight = pd.Series(p.count[rows] * (hi - lo)[rows]).groupby(p.cluster[rows]).sum()
+    mean = weight / pd.Series(p.count[rows]).groupby(p.cluster[rows]).sum()
+    hi = hi.astype(float).copy()
+    hi[rows] = mean.reindex(p.cluster[rows]).to_numpy()
+    return lo, hi
+
+
+def _exact(p: Positions, gates: Gates) -> dict:
+    """`null._clusters`' exact and order for `p` under `gates.makers` (none unless "exact"
+    and `p` has maker fills)."""
+    if gates.makers != "exact" or not p.makes:
+        return {}
+    return {"exact": p.maker, "order": p.order}
 
 def _alternative(p: Positions, edge: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(win, lo, hi): each position wins with its break-even probability plus `edge`
@@ -191,12 +252,14 @@ def power(discovery_positions: Positions, positions: Positions, days: np.ndarray
     shrink the days and overstate power). The bootstrap uses `gates.power_resamples`
     draws per world, fewer than the test's: a slightly stricter cutoff, and a little
     more noise."""
-    d, p = discovery_positions, positions
+    d, p = (_for_makers(x, gates) for x in (discovery_positions, positions))
     dep, widen, totals = _null(d, p, rng, gates)
     null_net = totals * np.sqrt(widen)
     win, lo, hi = _alternative(p, edge)
+    if gates.makers == "one_interval" and p.makes:
+        lo, hi = _one_interval(lo, hi, p)
     scale = np.sqrt(max(null.widening(dependence, p.buy_yes, p.count, hi - lo, lo, hi,
-                                      p.cluster, p.day, win)
+                                      p.cluster, p.day, win, **_exact(p, gates))
                         for dependence in (dep, null.Dependence(dep.rho, ()))))
     stake = p.count * float(PRICE_SCALE)
     day = np.searchsorted(days, p.day)

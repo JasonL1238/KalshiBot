@@ -167,3 +167,58 @@ def test_evaluate_refuses_inputs_outside_the_nulls_scope():
     for bad in (overpaid, seconds):
         with pytest.raises(ValueError):
             gauntlet.evaluate(discovery, disc, daily, bad, RNG, gauntlet.Gates(draws=50))
+
+
+def test_maker_methods_are_named():
+    with pytest.raises(ValueError, match="makers must be one of"):
+        gauntlet.Gates(makers="unknown")
+
+
+@pytest.mark.parametrize("makers", sorted(gauntlet.MAKER_METHODS))
+def test_maker_methods_leave_other_positions_alone(makers):
+    """A taker's positions, flagged or not, get the same verdict under every method."""
+    rng = np.random.default_rng(5)
+    disc, conf = positions(3000, 300, 0.0, rng), positions(600, 60, 0.02, rng, first_day=300)
+    returns = pd.DataFrame({"a": rng.normal(0, 1, 300)})
+    daily = pd.Series(rng.normal(0, 1, 60))
+    flagged = [replace(p, maker=np.zeros(len(p.day), bool)) for p in (disc, conf)]
+    gates = replace(GATES, draws=500)
+    nested = gauntlet.evaluate(returns, disc, daily, conf, np.random.default_rng(1), gates)
+    other = gauntlet.evaluate(returns, *flagged[:1], daily, flagged[1],
+                              np.random.default_rng(1), replace(gates, makers=makers))
+    assert repr(other) == repr(nested)  # pbo is NaN with one configuration
+
+
+def test_one_interval_puts_a_contracts_fills_on_one_interval_and_keeps_their_centre():
+    p = gauntlet.Positions(
+        net_pnl=np.zeros(4), paid=np.full(4, 800_000.0), won=np.zeros(4),
+        buy_yes=np.zeros(4, bool), count=np.array([1, 3, 1, 1]),
+        p_yes=np.array([0.1, 0.2, 0.3, 0.4]), lo=np.zeros(4),
+        hi=np.array([0.1, 0.2, 0.3, 0.4]), cluster=np.array([0, 0, 1, 2]),
+        day=np.zeros(4, int), maker=np.array([True, True, True, False]))
+    merged = gauntlet._for_makers(p, replace(GATES, makers="one_interval"))
+    assert merged.hi[:2] == pytest.approx([0.175, 0.175])  # (0.1 + 3 × 0.2) / 4
+    assert (merged.p_yes * merged.count)[:2].sum() == pytest.approx((p.p_yes * p.count)[:2].sum())
+    assert merged.hi[2:] == pytest.approx(p.hi[2:])  # alone on its contract; not a maker
+    with pytest.raises(ValueError, match="standalone"):
+        gauntlet._for_makers(replace(p, lo=np.full(4, 0.05), hi=p.hi + 0.05),
+                             replace(GATES, makers="one_interval"))
+
+
+def test_maker_fills_must_stay_on_standalone_contracts():
+    row = {"pnl": 0, "paid": 800_000, "won": 0.0, "side": "no", "fill_count": 1,
+           "p_yes": 0.2, "lo": 0.0, "hi": 0.2, "cluster": 0, "day": 0, "maker": True}
+    frame = pd.DataFrame([{**row, "ticker": "A-60"}, {**row, "ticker": "A-70"}])
+    with pytest.raises(ValueError, match="standalone"):
+        gauntlet.Positions.from_frame(frame)
+    assert gauntlet.Positions.from_frame(frame.assign(maker=False)).maker.sum() == 0
+
+
+def test_one_interval_leaves_a_takers_rows_exactly_as_they_were():
+    p = gauntlet.Positions(
+        net_pnl=np.zeros(3), paid=np.full(3, 800_000.0), won=np.zeros(3),
+        buy_yes=np.zeros(3, bool), count=np.ones(3), p_yes=np.array([0.1, 0.2, 0.3]),
+        lo=np.array([0.0, 0.0, 0.7]), hi=np.array([0.1, 0.2, 1.0]),
+        cluster=np.array([0, 0, 1]), day=np.zeros(3, int), maker=np.array([True, True, False]))
+    merged = gauntlet._for_makers(p, replace(GATES, makers="one_interval"))
+    assert merged.p_yes[2] == p.p_yes[2] and merged.lo[2] == p.lo[2] and merged.hi[2] == p.hi[2]
