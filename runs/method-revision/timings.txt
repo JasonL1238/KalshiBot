@@ -1,0 +1,9 @@
+baseline-taker-0.1 rc=0 wall=789s args=0.1 --only boundary
+baseline-yes-0.1 rc=0 wall=212s args=0.1 --only 'YES family'
+baseline-edge1-0.1 rc=0 wall=138s args=0.1 --only '1¢ lower NO asks on q < 0.15'
+baseline-h1-0.1 rc=0 wall=587s args=0.1 --only 'H1-shaped: NO at YES ≤ 20¢ only, half spread 1¢'
+baseline-power-taker-0.1 rc=0 wall=154s args=power 0.1 --only '1¢ lower asks'
+baseline-power-h1-0.1 rc=0 wall=192s args=power 0.1 --only 'H1-shaped: 0.75'
+baseline-makers-0.25 rc=0 wall=3782s args=0.25 --only makers:
+baseline-power-makers-0.25 rc=0 wall=628s args=power 0.25 --only makers:
+ALLDONE
