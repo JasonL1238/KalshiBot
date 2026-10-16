@@ -1,6 +1,8 @@
 """Cross-checks on the real data (run with local data; skipped in CI)."""
 
 import json
+import tempfile
+import uuid
 from datetime import UTC, date, datetime, timedelta
 
 import duckdb
@@ -52,7 +54,11 @@ def api_files(days) -> list[str]:
 
 
 def connect():
-    con = duckdb.connect()
+    # DuckDB's default cap is 80% of RAM; under this one, tape-wide queries spill instead. Each
+    # connection spills to its own directory under the system temp dir ($TMPDIR), not a ./.tmp
+    # shared by concurrent runs; DuckDB creates it on first spill and removes it on close.
+    spill = f"{tempfile.gettempdir()}/kalshibot-duckdb-{uuid.uuid4().hex}"
+    con = duckdb.connect(config={"memory_limit": "4GB", "temp_directory": spill})
     con.execute("SET TimeZone = 'UTC'")
     return con
 
@@ -96,10 +102,14 @@ def test_every_trade_has_a_market():
     days = api_days()
     if not days or not (API / "markets.parquet").exists():
         pytest.skip("API trades or markets not downloaded yet")
+    # Trades are counted per key before the join. DuckDB sizes a multi-file scan from its first
+    # file, here an empty day, so it guesses ~1M trades and would build the join's hash table
+    # on them, one entry per trade.
     orphans, total = connect().sql(f"""
-        SELECT count(*) FILTER (WHERE m.ticker IS NULL), count(*)
-        FROM read_parquet({api_files(days)}, hive_partitioning = false) t
-        LEFT JOIN read_parquet('{API}/markets.parquet') m USING (ticker)""").fetchone()
+        WITH t AS (SELECT ticker, count(*) AS n
+                   FROM read_parquet({api_files(days)}, hive_partitioning = false) GROUP BY ALL)
+        SELECT coalesce(sum(n) FILTER (WHERE m.ticker IS NULL), 0), sum(n)
+        FROM t LEFT JOIN read_parquet('{API}/markets.parquet') m USING (ticker)""").fetchone()
     assert orphans == 0, f"{orphans} of {total} trades have no row in markets.parquet"
 
 
@@ -112,9 +122,11 @@ def test_trades_sit_on_their_market_tick_grid():
     if not days or not (API / "markets.parquet").exists():
         pytest.skip("API trades or markets not downloaded yet")
     rows = connect().sql(f"""
-        SELECT t.yes_price, m.price_ranges, count(*)
-        FROM read_parquet({api_files(days)}, hive_partitioning = false) t
-        JOIN read_parquet('{API}/markets.parquet') m USING (ticker) GROUP BY ALL""").fetchall()
+        WITH t AS (SELECT ticker, yes_price, count(*) AS n  -- see test_every_trade_has_a_market
+                   FROM read_parquet({api_files(days)}, hive_partitioning = false) GROUP BY ALL)
+        SELECT t.yes_price, m.price_ranges, sum(n)
+        FROM t JOIN read_parquet('{API}/markets.parquet') m USING (ticker)
+        GROUP BY ALL""").fetchall()
     off = [(p, n) for p, r, n in rows if not on_tick(p, json.loads(r))]
     assert sum(n for _, n in off) <= 1e-3 * sum(n for *_, n in rows), off[:10]
     assert all(p % 10 == 0 for p, _ in off), f"off even the $0.001 grid: {off[:10]}"
