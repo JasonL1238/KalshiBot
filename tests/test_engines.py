@@ -27,7 +27,8 @@ TRADES = pd.DataFrame([
     ("KXT-B", T("2026-01-01 00:01:30"), 5900, 500, "no"),  # a NO taker paid 41¢
     ("KXT-C", T("2026-01-01 00:05:00"), 2000, 500, "yes"),
     ("KXT-S", T("2026-01-01 00:00:00"), 3000, 1000, "yes"),
-], columns=["ticker", "created_time", "yes_price", "count", "taker_side"])
+], columns=["ticker", "created_time", "yes_price", "count", "taker_side"]).assign(
+    trade_id=lambda t: "T" + t.index.astype(str))
 MARKETS = pd.DataFrame([("KXT-A", "yes", 10_000, T("2026-01-02")),
                         ("KXT-B", "no", 0, T("2026-01-02")),
                         ("KXT-C", None, None, None),
@@ -130,6 +131,25 @@ def test_bar_limits_fill_only_within_their_price():
     # bar closes: KXT-A 42¢ at 00:01, KXT-B 59¢ YES (41¢ NO) at 00:02
     limits = LIMITS.assign(limit=[4200, 4199, 4100, 4099])
     assert by_intent(run(limits, bars)[0]) == {(11, 4200, 1000), (13, 4100, 300)}
+
+
+# A NO taker's sweeps at the instants that set intent 1's fill: its arrival (replay) and
+# its bar's end (bars, with the tape's own print). Their ids sort after the tape's.
+SWEEP = pd.DataFrame([("KXT-A", T("2026-01-01 00:00:31"), 4060, 300, "no", "U1"),
+                      ("KXT-A", T("2026-01-01 00:00:31"), 4050, 300, "no", "U2"),
+                      ("KXT-A", T("2026-01-01 00:01:00"), 4150, 300, "no", "U3")],
+                     columns=TRADES.columns)
+
+
+@pytest.mark.parametrize(("engine", "intent_1"), [(replay, {(1, 4050, 300), (1, 4051, 700)}),
+                                                  (bars, {(1, 4150, 1000)})])
+def test_engines_order_prints_sharing_an_instant_by_trade_id(engine, intent_1):
+    tape = pd.concat([TRADES, SWEEP], ignore_index=True)
+    got, again = (engine(TAKERS, t, MARKETS, series_of, SCHEDULE, END, DIRECT_MEMBER)
+                  for t in (tape, tape[::-1]))  # reversed: every same-instant pair swaps
+    for a, b in zip(again, got, strict=True):  # the same fills and engine PnL
+        pd.testing.assert_frame_equal(a, b)
+    assert {f for f in by_intent(got[0]) if f[0] == 1} == intent_1  # the last id's price
 
 
 def test_replay_timing_doesnt_depend_on_where_the_tape_starts():

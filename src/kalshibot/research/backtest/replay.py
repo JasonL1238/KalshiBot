@@ -2,14 +2,15 @@
 
 Tier 1 (`fills.py`) decides fills by the rules in docs/BACKTESTING.md (Fill models);
 here NautilusTrader decides taker fills by its own, on a top of book driven by the trade
-tape: an order is processed when it arrives, `latency` after its decision (status events
-at the decision and at arrival make this independent of how busy the tape is), and fills
-at its market's last print, however old, since the book shows the last print on both
-sides: up to that print's size, the rest one tick worse. With no print yet, it is
-rejected. A limit order fills only within its limit, and whatever it can't fill on
-arrival is canceled. An order arriving after its market settled, or after `window_end`,
-is dropped. `settle.settle` prices these fills exactly like Tier-1 fills, so the gap
-between the tiers is fill-model uncertainty alone (docs/BACKTESTING.md).
+tape: an order is processed when it arrives (`latency` after its decision), after every
+print at that instant (status events at the decision and at arrival make this
+independent of how busy the tape is), and fills at its market's last print, however old,
+since the book shows the last print on both sides: up to that print's size, the rest one
+tick worse. With no print yet, it is rejected. A limit order fills only within its
+limit, and whatever it can't fill on arrival is canceled. An order arriving after its
+market settled, or after `window_end`, is dropped. `settle.settle` prices these fills
+exactly like Tier-1 fills, so the gap between the tiers is fill-model uncertainty alone
+(docs/BACKTESTING.md).
 
 Makers aren't replayed: on a book made of prints, a resting bid at the last price fills
 completely at the next event of any kind, so maker fills here would be noise. Their
@@ -122,8 +123,8 @@ def replay(intents: pd.DataFrame, trades: pd.DataFrame, markets: pd.DataFrame,
            series_of: Callable[[str], str], schedule: FeeSchedule, window_end: datetime,
            precision: int, *, latency: timedelta = timedelta(seconds=1)
            ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Fill taker `intents` (`strategies.base.INTENT_COLUMNS`) on `trades` (ticker, created_time,
-    yes_price, count, taker_side).
+    """Fill taker `intents` (`strategies.base.INTENT_COLUMNS`) on `trades` (trade_id, ticker,
+    created_time, yes_price, count, taker_side).
 
     Returns (fills as `fills.FILL_COLUMNS`, engine PnL): the second is NautilusTrader's own
     realized PnL in micro-dollars per market that settled before `window_end`, for the
@@ -146,13 +147,13 @@ def replay(intents: pd.DataFrame, trades: pd.DataFrame, markets: pd.DataFrame,
         price, count, buy=True, maker=is_maker, precision=precision))
     engine.add_venue(KALSHI, OmsType.NETTING, AccountType.CASH, base_currency=MICRO_USD,
                      starting_balances=[Money(1e9, MICRO_USD)], fee_model=fees,
-                     latency_model=LatencyModel(0, delay),
+                     latency_model=LatencyModel(0, delay + 1),  # after the instant's prints
                      settlement_prices={instruments[r.ticker].id: r.paid / PRICE_SCALE
                                         for r in done.itertuples()},
                      trade_execution=True, bar_execution=False)
     for instrument in instruments.values():
         engine.add_instrument(instrument)
-    tape = trades[trades["ticker"].isin(tickers)]
+    tape = trades[trades["ticker"].isin(tickers)].sort_values(["created_time", "trade_id"])
     data = [TradeTick(instruments[r.ticker].id, Price(r.yes_price / PRICE_SCALE, 4),
                       Quantity(r.count / SIZE_SCALE, 2),
                       AggressorSide.BUYER if r.taker_side == "yes" else AggressorSide.SELLER,

@@ -90,6 +90,9 @@ API keys, so use it for all execution testing.
 - Prices are fixed-point dollar strings (`"0.5600"`), up to 4 decimals. Integer-cent
   fields were removed in early 2026; old tutorials using them are broken.
 - Quantities are `*_fp` strings (`"148.34"`): **fractional contracts** exist.
+- A trade's `created_time` is to the microsecond, and a sweep's levels share one.
+  `trade_id` doesn't order an instant's prints: in id order, the next print was as often a
+  better level as a worse one (2025-06-02 and 2026-10-13 tapes).
 - Each market has `price_ranges` (`{start, end, step}`) defining legal tick sizes; some
   markets have sub-penny ticks near 0 and 1. Snap order prices to `step`.
 - The orderbook returns **bids only** for YES and NO, ascending. Best YES ask = 1 − best NO bid.

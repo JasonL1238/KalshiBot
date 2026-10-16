@@ -37,9 +37,9 @@ def bars(intents: pd.DataFrame, trades: pd.DataFrame, markets: pd.DataFrame,
          series_of: Callable[[str], str], schedule: FeeSchedule, window_end: datetime,
          precision: int, *, latency: timedelta = timedelta(seconds=1)
          ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Fill taker `intents` (`strategies.base.INTENT_COLUMNS`) at bar closes of `trades` (ticker,
-    created_time, yes_price, count, taker_side). Returns (fills, vectorbt's PnL in
-    micro-dollars per market that settled before `window_end`)."""
+    """Fill taker `intents` (`strategies.base.INTENT_COLUMNS`) at bar closes of `trades`
+    (trade_id, ticker, created_time, yes_price, count, taker_side). Returns (fills,
+    vectorbt's PnL in micro-dollars per market that settled before `window_end`)."""
     end = pd.Timestamp(window_end).tz_convert("UTC")
     m = markets.set_index("ticker").reindex(sorted(set(intents["ticker"])))
     m = m.assign(paid=yes_payoff(m), done=settled(m, window_end))
@@ -50,10 +50,9 @@ def bars(intents: pd.DataFrame, trades: pd.DataFrame, markets: pd.DataFrame,
 
     # the close at every order bar: the last print at or before the bar's end
     tape = trades.assign(created_time=pd.to_datetime(trades["created_time"], utc=True)
-                         .dt.as_unit("ns"))
+                         .dt.as_unit("ns")).sort_values(["created_time", "trade_id"])
     last = pd.merge_asof(orders[["ticker", "bar"]].drop_duplicates().sort_values("bar"),
-                         tape.sort_values("created_time")[["ticker", "created_time",
-                                                           "yes_price"]],
+                         tape[["ticker", "created_time", "yes_price"]],
                          left_on="bar", right_on="created_time", by="ticker")
     orders = orders.merge(last[["ticker", "bar", "yes_price"]], on=["ticker", "bar"])
     orders = orders[orders["yes_price"].notna()]  # no print yet: no close to fill at

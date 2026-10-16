@@ -165,6 +165,11 @@ resting bid at the last price fills completely at the next event of any kind. Th
 do what typical backtests on trade data do; Tier 1 is deliberately harsher about stale
 prints.
 
+Among prints sharing an instant, such as a sweep's levels, both engines count the one
+with the greatest trade_id as the last. The ids don't order an instant's prints
+([RESEARCH §1](RESEARCH.md)), so the pick is arbitrary but the same on every run. Tier 1
+groups an instant's prints, so it needs no such rule.
+
 Tier 1's taker fill is capped by the intent's limit but has no floor, so the next
 same-side print, up to `max_wait` later, can come far below the ask at decision time: in
 H1's discovery, a third of YES ≥ 80¢ fills came more than 2¢ below the deciding print,
