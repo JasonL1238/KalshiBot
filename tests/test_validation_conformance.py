@@ -284,7 +284,8 @@ def test_only_keeps_each_rows_grid_seed(monkeypatch):
 
 def test_backtesting_doc_shows_the_reports_tables():
     doc = (Path(__file__).parents[1] / "docs" / "BACKTESTING.md").read_text()
-    assert conformance.SIZE_HEADER in doc and conformance.POWER_HEADER in doc
+    for header in conformance.SIZE_HEADER, conformance.POWER_HEADER, conformance.PREDICTION_HEADER:
+        assert header in doc, header
 
 
 @pytest.mark.slow

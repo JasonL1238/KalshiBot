@@ -89,6 +89,11 @@ print's own price, a ±2¢ band, any print size and no limit) makes any configur
 profitable; how far below the deciding print Tier 1 filled:
 [BACKTESTING](BACKTESTING.md#fill-models).
 
+Status (2026-10-15): H1's confirmation waits for `gauntlet.power`'s revision and for a
+revised method that passes the H1-shaped rows (a logged change to its registered method,
+with the user's sign-off), then for its coupling R check ([BACKTESTING](BACKTESTING.md),
+Conformance and step 6).
+
 ## Hypothesis notes
 
 ### H5 weather
@@ -148,8 +153,9 @@ What these families share:
   calibrated queue models ([BACKTESTING](BACKTESTING.md) step 3); early exits need
   round-trip accounting and a path null (the null's scope there); a configuration that
   buys both sides (possible in H3, H4, H8, H9 and H10) needs the mixed-side conformance
-  world, and a maker family (H2, H8) the maker world and its registration checks
-  ([BACKTESTING](BACKTESTING.md) step 6 and the pre-registration paragraph).
+  world, and a maker family (H2, H8) a revised method that passes the maker rows and its
+  registration checks ([BACKTESTING](BACKTESTING.md), Conformance, step 6 and the
+  pre-registration paragraph).
 - **One mechanism per family** (BACKTESTING step 5), so m stays 12.
 - **H2 and H8:** Bartlett & O'Hara inform both, so S_h is 2026-03-12
   (`calendar.STUDY_END`), likely leaving them to forward tests
@@ -164,15 +170,19 @@ What these families share:
   of it within a minute. Tier 1 credits less: a through-print never fills the deepest
   level a sweep reaches, and "deep" was measured from the sweep's first fill, not from
   the touch when an order would have been placed.
-- **Testable** once its conformance worlds have run (the method's limits, above).
-- **Gate first:** all its evidence predates the end of market orders
+- **Gate:** all its evidence predates the end of market orders
   ([RESEARCH §1](RESEARCH.md)), which may have made sweeps rarer. The check (user
-  ruling, 2026-10-14): before registration, count sweeps through its depths on forward
-  days (after 2026-09-30), reading no outcomes or PnL. The counts decide whether H8
-  registers as scoped (enough sweeps for power) or is re-scoped or dropped, and are
-  declared at registration. None of these days is in a window H8 could be tested on: its
-  confirmation and the lockbox end before the forward window, and a forward test would
-  start after registration (`calendar.py`).
+  ruling, 2026-10-14) counted sweeps through its depths on forward days, reading no
+  outcomes or PnL; its counts are declared at registration, and none of these days is in
+  a window H8 could be tested on (`calendar.py`). The count (2026-10-15;
+  `data/exploration/2026-10-h8-gate/`, local only), on 2026-10-01..13 against the same
+  days of 2025: game winners' episodes (runs of sweeps on one contract and side,
+  reaching 25¢ below the price 2 s earlier; a new run after 10 s without one) were about
+  half as many (0.48×; 90% interval 0.30–0.75), from 1.2× in NCAAF to 0.2× in tennis
+  (NBA, in preseason both years, aside), and games a day with such a sweep were 0.62×
+  without NCAAF. Deep sweeps grew in props, spreads, totals and new leagues, which H8's
+  evidence didn't come from. User ruling (2026-10-15): keep H8, with its leagues fixed
+  at registration.
 
 #### H9 decided outcomes, externally triggered
 - **Mechanism.** After an external trigger that the result is decided (ESPN end of

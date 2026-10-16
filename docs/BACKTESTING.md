@@ -131,8 +131,8 @@ power is simulated on round-trip profit, exit costs included.
   confirmation window, since Kalshi's mix of markets keeps changing. Conformance's
   discovery is 400 days, so there the sample is all of it; a 200-day sample proved too
   noisy (the gauntlet's size at Holm's level reached 0.8% when shocks last for days and
-  confirmation is busier). Conformance includes a world whose dependence appears only
-  after the seam.
+  confirmation is busier). A shock that starts at the seam, which this sample can't
+  see, is in Conformance.
 
 Fixed per family at M3 pre-registration, before its confirmation test: the minimum
 economically meaningful edge (`Strategy.min_edge`); whether it is confirmed forward; the
@@ -215,12 +215,6 @@ trades-only data) gave silently wrong numbers without one. That is why `settle.p
 the reference, and every engine's own PnL is reconciled against it.
 
 ## Conformance: how the confirmation test was chosen
-
-> Being re-measured for M3's dependence sample (discovery's last 400 days) and its new
-> worlds (a shock from the seam on, the makers and the H1-shaped rows); until then the
-> two tables below are M2's, and the third (`python -m
-> kalshibot.research.validation.conformance power`) is pending. `--only makers:` (or
-> `--only H1-shaped`) runs those rows alone, seeded as in the full grid.
 
 `research/validation/conformance.py` runs the whole pipeline (selection, then the
 candidate tests) on synthetic worlds whose truth is known (`synthetic.py`). The family
@@ -319,42 +313,133 @@ tests every configuration of the family, favorites included.
 | mixed family, binaries only, shock ρ = 0.5 lasting days (φ = 0.8) | 2000 | 0.179 | 1.11 | 4.08 | **36.9** / **21.4** | **23.0** / **14.5** | **16.2** / **5.1** | **26.2** / **17.6** | **14.4** / **4.9** | 2.3 / **0.9** | 0.5 / 0.3 | **30.1** / **15.3** | 1.0 / 0.0 | 1.0 / 0.0 |
 | boundary, binaries only, shock ρ = 0.5 lasting days (φ = 0.8), confirmation twice as busy | 2000 | 0.191 | 0.90 | 5.07 | **36.6** / **21.9** | **30.0** / **17.8** | **24.2** / **10.7** | **28.6** / **20.8** | **20.5** / **8.5** | **6.2** / **3.5** | 0.9 / 0.6 | **33.1** / **22.3** | 3.1 / 0.2 | 3.0 / 0.2 |
 | boundary, ladders all strike ladders, same-day shock ρ = 0.5 | 2000 | 0.215 | -0.02 | 1.53 | **23.2** / **6.3** | **11.2** / **5.1** | **7.3** / 0.7 | **15.2** / **8.2** | **6.6** / 0.5 | 0.2 / 0.0 | 0.0 / 0.0 | **10.1** / **2.5** | 2.6 / 0.1 | 2.6 / 0.1 |
+| boundary, binaries only, shock ρ = 0.5 from the seam on (none in discovery) | 2000 | 0.006 | -0.01 | 1.04 | **23.5** / **6.4** | **10.8** / **5.1** | **6.0** / 0.4 | **14.8** / **7.3** | 5.9 / 0.4 | 0.5 / 0.1 | 0.1 / 0.0 | 5.9 / **0.9** | 5.4 / 0.2 | 5.3 / 0.2 |
+| makers: NO bids 5–25¢ below the truth, 16 sweeps a contract | 2000 | 0.003 | -0.00 | 1.16 | **11.2** / **1.5** | 4.5 / 0.2 | 5.1 / 0.4 | 4.9 / 0.4 | 4.1 / 0.3 | 0.2 / 0.0 | 0.0 / 0.0 | 5.3 / 0.6 | 4.2 / 0.4 | 3.7 / 0.2 |
+| makers: NO bids 5–25¢ below the truth, shock ρ = 0.5 lasting days (φ = 0.8) | 2000 | 0.148 | 0.85 | 7.42 | **28.0** / **14.5** | **18.3** / **8.0** | **23.7** / **14.1** | **12.2** / **3.7** | **12.0** / **3.7** | **6.8** / **4.4** | 1.8 / **1.4** | **32.1** / **24.0** | 4.4 / 0.4 | 4.0 / 0.4 |
+| makers: NO bids 1–5¢ below the truth, 64 sweeps a contract and news | 2000 | 0.003 | -0.01 | 1.14 | **9.3** / **1.1** | 5.9 / 0.5 | **7.6** / **0.9** | **6.9** / **0.8** | **6.3** / 0.5 | 0.7 / 0.1 | 0.2 / 0.1 | **7.4** / **1.1** | **6.4** / 0.7 | 5.6 / 0.5 |
+| makers: NO bids 1–5¢ below the truth, 64 sweeps and news, shock ρ = 0.5 lasting days (φ = 0.8) | 2000 | 0.154 | 0.88 | 11.96 | **28.1** / **15.6** | **24.9** / **12.3** | **33.6** / **24.1** | **13.8** / **5.2** | **13.8** / **5.2** | **8.7** / **6.6** | 1.3 / **0.9** | **35.5** / **27.0** | **6.8** / **0.9** | **6.3** / **0.9** |
+| makers: NO bids 1¢ below the truth only, 64 sweeps a contract and news | 2000 | 0.003 | -0.01 | 1.13 | 5.5 / 0.6 | 5.2 / 0.4 | **7.8** / **0.9** | 5.6 / 0.6 | 5.4 / 0.5 | 0.6 / 0.0 | 0.0 / 0.0 | **7.5** / **1.1** | **6.7** / **0.8** | 5.1 / 0.5 |
+| makers: NO bids 5¢ below the truth only, 16 sweeps a contract | 2000 | 0.003 | -0.01 | 1.14 | 5.1 / 0.5 | 5.2 / 0.2 | **7.0** / **0.8** | 5.7 / 0.7 | 5.4 / 0.4 | 0.4 / 0.0 | 0.0 / 0.0 | **7.1** / 0.7 | 5.9 / 0.4 | 5.0 / 0.3 |
+| H1-shaped: boundary, 15 daily decisions a contract | 2000 | 0.002 | -0.00 | 1.07 | **21.0** / **4.7** | **9.5** / **3.1** | 1.1 / 0.1 | **11.0** / **4.8** | 1.1 / 0.1 | 0.1 / 0.0 | 0.0 / 0.0 | 2.8 / 0.2 | 0.9 / 0.1 | 0.9 / 0.1 |
+| H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, binaries only | 2000 | 0.003 | -0.01 | 1.08 | **6.3** / **0.8** | **7.4** / **1.0** | 4.3 / 0.2 | **8.6** / **1.6** | 4.3 / 0.2 | 0.1 / 0.0 | 0.0 / 0.0 | 4.5 / 0.4 | 3.9 / 0.1 | 3.9 / 0.1 |
+| H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, shock ρ = 0.5 lasting days (φ = 0.8) | 2000 | 0.006 | 0.02 | 1.30 | **9.0** / **1.8** | **8.1** / **1.1** | **9.2** / **1.4** | **8.7** / **1.4** | **7.9** / **1.0** | 1.0 / 0.1 | 0.0 / 0.0 | **9.2** / **1.5** | **6.5** / **0.9** | **6.0** / 0.7 |
+| H1-shaped: NO at YES ≤ 20¢ only, half spread 1¢ | 2000 | 0.002 | -0.00 | 1.09 | 5.5 / 0.6 | 5.8 / 0.6 | 5.3 / 0.4 | **6.6** / **1.2** | 5.1 / 0.4 | 0.1 / 0.0 | 0.0 / 0.0 | 5.1 / 0.4 | 4.9 / 0.3 | 4.6 / 0.3 |
+| H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢ | 2000 | 0.003 | -0.00 | 1.09 | 4.5 / 0.2 | **6.1** / **1.0** | **7.0** / **1.2** | **6.5** / **1.2** | 5.9 / **0.9** | 0.4 / 0.1 | 0.0 / 0.0 | **6.6** / **1.1** | **6.3** / **0.9** | 5.5 / 0.7 |
+| H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, ladders all strike ladders | 2000 | 0.002 | -0.00 | 1.05 | 5.7 / **0.9** | **7.0** / **1.0** | 1.5 / 0.0 | **8.5** / **1.5** | 1.5 / 0.0 | 0.1 / 0.0 | 0.0 / 0.0 | 1.5 / 0.1 | 1.4 / 0.0 | 1.4 / 0.0 |
 
+In the one-decision taker worlds (every row above the makers):
 - Selecting on the same data that is then tested (naive in-sample) finds an edge
-  7.5–37% of the time where none exists, and every time when it existed only before the seam.
+  7.5–37% of the time where none exists (none at market prices, where the family
+  loses), and every time when it existed only before the seam.
 - A t-test or bootstrap on confirmation alone, Romano–Wolf, and the plain null break
   under dependence (same-day, or lasting days) or for YES buyers; the null with a DSR
   gate breaks when shocks last.
-- Two procedures hold their size in every world: the gauntlet, and the null gated by
-  both DSR and PBO, which does it by rarely rejecting (below). The widened null alone
-  breaks at Holm's level for YES buyers under a shock (0.8% against 0.71%), where the
-  bootstrap's daily view rescues it, so the gauntlet requires both, for at most about 5
-  points of power.
+- Two procedures hold their size: the gauntlet, and the null gated by both DSR and PBO,
+  which does it by rarely rejecting (the power table). The widened null alone breaks at
+  Holm's level for YES buyers under a shock (0.8% against 0.705%), where the bootstrap's
+  daily view rescues it, so the gauntlet requires both, for at most about 5 points of
+  power. A shock that starts at the seam, so discovery can't see it, doesn't break the
+  gauntlet (5.3% / 0.2%).
+
+In the maker and H1-shaped worlds:
+- Positions repeat on one contract, so the t-test, bootstrap, Romano–Wolf and plain null
+  break in some of these worlds even without a shock (the t-test only in the H1-shaped
+  ones).
+- The gauntlet holds its size in five of the six maker worlds, H8's depths under a
+  lasting shock among them (4.0% / 0.4%), but not with bids 1–5¢ deep, news and a
+  lasting shock (6.3% / 0.9%, against limits of 5.97% / 0.705%).
+- It holds its size in five of the six H1-shaped worlds. With a lasting shock at the
+  0.5¢ half spread it finds an edge 6.0% of the time at α = 0.05, over the 5.97% limit,
+  and 0.7% at Holm's level, just under the 0.705% limit.
 
 Power, as the share of worlds where an edge is found (same cells):
 
 | Edge world | true net edge per position | positions/day | naive in-sample | null | null + DSR | null + DSR + PBO | Romano–Wolf | widened null | gauntlet |
 |---|---|---|---|---|---|---|---|---|---|
-| 0.5¢ lower NO asks on q < 0.15 | +0.46¢ | 17.2 | 85.2 / 47.8 | 14.2 / 2.2 | 10.2 / 2.0 | 2.0 / 0.5 | 15.5 / 2.5 | 14.0 / 1.8 | 14.0 / 1.5 |
-| 1¢ lower NO asks on q < 0.15 | +0.91¢ | 20.8 | 99.5 / 96.2 | 51.0 / 12.5 | 50.0 / 12.0 | 15.5 / 3.0 | 49.8 / 15.5 | 48.5 / 11.2 | 48.5 / 11.2 |
-| 2¢ lower NO asks on q < 0.15 | +1.77¢ | 25.3 | 100.0 / 100.0 | 97.8 / 81.2 | 97.8 / 81.2 | 74.0 / 61.3 | 98.8 / 86.2 | 97.2 / 77.0 | 97.0 / 75.8 |
-| 3¢ lower NO asks on q < 0.15 | +2.62¢ | 25.3 | 100.0 / 100.0 | 100.0 / 97.2 | 100.0 / 97.2 | 95.5 / 93.2 | 100.0 / 99.0 | 100.0 / 97.0 | 100.0 / 97.0 |
-| 0.25¢ lower NO asks on q < 0.15, 100 events/day | +0.23¢ | 96.9 | 88.2 / 51.5 | 26.0 / 4.8 | 21.0 / 3.5 | 3.8 / 0.8 | 23.2 / 4.0 | 25.0 / 3.8 | 24.5 / 3.8 |
-| 0.5¢ lower NO asks on q < 0.15, 100 events/day | +0.46¢ | 111.2 | 100.0 / 99.5 | 59.0 / 19.5 | 59.0 / 19.5 | 20.2 / 6.2 | 62.0 / 23.8 | 56.5 / 17.5 | 56.2 / 17.2 |
-| 1¢ lower NO asks on q < 0.15, 100 events/day | +0.90¢ | 125.5 | 100.0 / 100.0 | 98.2 / 87.2 | 98.2 / 87.2 | 75.8 / 69.0 | 98.8 / 89.5 | 97.8 / 84.8 | 97.8 / 83.5 |
-| 2¢ lower NO asks on q < 0.15, halving to 1¢ at the seam | +0.89¢ | 25.8 | 100.0 / 100.0 | 57.2 / 16.5 | 57.2 / 16.5 | 43.0 / 12.5 | 52.2 / 18.0 | 54.0 / 15.8 | 53.5 / 15.5 |
-| YES family: 1¢ lower YES asks on q < 0.15 | +1.02¢ | 24.5 | 100.0 / 99.2 | 71.5 / 37.2 | 71.5 / 37.2 | 10.8 / 5.8 | 77.5 / 42.5 | 67.2 / 27.5 | 65.8 / 22.2 |
-| YES family: 2¢ lower YES asks on q < 0.15 | +2.09¢ | 26.1 | 100.0 / 100.0 | 99.8 / 98.5 | 99.8 / 98.5 | 35.0 / 34.2 | 100.0 / 99.5 | 99.5 / 97.2 | 99.5 / 96.0 |
-| YES family: 3¢ lower YES asks on q < 0.15 | +3.16¢ | 26.6 | 100.0 / 100.0 | 100.0 / 100.0 | 100.0 / 100.0 | 52.0 / 52.0 | 100.0 / 100.0 | 100.0 / 100.0 | 100.0 / 100.0 |
+| 0.5¢ lower NO asks on q < 0.15 | +0.46¢ | 17.0 | 86.2 / 47.5 | 15.0 / 1.8 | 9.8 / 1.5 | 1.2 / 0.2 | 19.0 / 3.0 | 13.8 / 1.8 | 13.0 / 1.5 |
+| 1¢ lower NO asks on q < 0.15 | +0.91¢ | 21.9 | 100.0 / 95.2 | 50.7 / 15.0 | 50.0 / 14.8 | 14.2 / 5.0 | 54.5 / 21.8 | 49.5 / 14.5 | 49.0 / 13.8 |
+| 2¢ lower NO asks on q < 0.15 | +1.77¢ | 25.0 | 100.0 / 100.0 | 92.2 / 74.2 | 92.2 / 74.2 | 70.0 / 56.8 | 96.2 / 83.2 | 91.5 / 71.5 | 91.5 / 71.0 |
+| 3¢ lower NO asks on q < 0.15 | +2.62¢ | 25.3 | 100.0 / 100.0 | 100.0 / 99.0 | 100.0 / 99.0 | 95.8 / 94.8 | 100.0 / 99.0 | 100.0 / 98.8 | 100.0 / 98.8 |
+| 0.25¢ lower NO asks on q < 0.15, 100 events/day | +0.23¢ | 91.7 | 91.0 / 50.2 | 21.5 / 3.2 | 16.2 / 2.5 | 2.8 / 0.5 | 22.0 / 5.0 | 20.0 / 3.0 | 19.8 / 2.8 |
+| 0.5¢ lower NO asks on q < 0.15, 100 events/day | +0.46¢ | 114.1 | 100.0 / 99.5 | 55.5 / 21.0 | 55.2 / 20.8 | 18.5 / 6.2 | 60.0 / 22.2 | 53.5 / 19.0 | 52.8 / 17.8 |
+| 1¢ lower NO asks on q < 0.15, 100 events/day | +0.89¢ | 127.1 | 100.0 / 100.0 | 99.0 / 90.8 | 99.0 / 90.8 | 71.0 / 65.2 | 99.2 / 93.0 | 99.0 / 89.0 | 99.0 / 88.5 |
+| 2¢ lower NO asks on q < 0.15, halving to 1¢ at the seam | +0.89¢ | 25.8 | 100.0 / 100.0 | 55.2 / 21.8 | 55.2 / 21.8 | 41.2 / 16.8 | 54.5 / 18.5 | 53.5 / 19.5 | 53.2 / 19.2 |
+| YES family: 1¢ lower YES asks on q < 0.15 | +1.03¢ | 24.7 | 100.0 / 99.8 | 71.5 / 35.0 | 71.5 / 35.0 | 14.0 / 5.8 | 77.5 / 44.5 | 67.0 / 27.5 | 64.2 / 23.2 |
+| YES family: 2¢ lower YES asks on q < 0.15 | +2.09¢ | 26.2 | 100.0 / 100.0 | 100.0 / 98.0 | 100.0 / 98.0 | 34.5 / 33.5 | 100.0 / 99.2 | 99.8 / 95.5 | 99.8 / 94.2 |
+| YES family: 3¢ lower YES asks on q < 0.15 | +3.16¢ | 26.4 | 100.0 / 100.0 | 100.0 / 100.0 | 100.0 / 100.0 | 52.2 / 52.2 | 100.0 / 100.0 | 100.0 / 100.0 | 100.0 / 100.0 |
 
-A 1¢ edge on about 20 positions a day for 100 days is found only 11% of the time at
-Holm's level, and 84% of the time with five times as many events a day. Each family's own sample
-sets its power, which is why a verdict can be Inconclusive. Reproduce with
-`OMP_NUM_THREADS=1 python -m kalshibot.research.validation.conformance`, which prints both
-tables (about 2 hours on 14 cores, Python 3.13; each world's seed is fixed) at the commit
-that adds this section. It uses 2,000 draws per test (`conformance.GATES`); the
-pre-registered gauntlet uses 20,000 (`gauntlet.PREREGISTERED`). The p-value is valid at
-any count, and fewer draws only lose power.
+A 1¢ edge on about 20 positions a day for 100 days is found only 14% of the time at
+Holm's level, and 89% of the time with five times as many events a day. Each family's
+own sample sets its power, which is why a verdict can be Inconclusive.
+
+Power predicted by `gauntlet.power` and measured for the gauntlet at Holm's level, over
+all worlds and over those whose cross-day estimate is negative (step 6; bold fails its
+pass rule):
+
+| Edge world | true net edge per position | widening | power predicted / gauntlet's | the same where the cross-day estimate is negative (worlds) |
+|---|---|---|---|---|
+| 0.5¢ lower asks | +0.47¢ | 1.05 | 2.6 / 4.0 | 2.8 / 4.8 (186) |
+| 1¢ lower asks | +0.95¢ | 1.08 | 16.4 / 17.7 | 18.0 / 20.4 (181) |
+| 1¢ lower asks, binaries only, shock ρ = 0.5 | +0.92¢ | 1.31 | **0.7 / 0.0** | **0.9 / 0.0** (193) |
+| 0.5¢ lower asks, binaries only, shock ρ = 0.3, 100 events/day | +0.47¢ | 1.80 | 0.7 / 0.7 | 0.8 / 1.0 (194) |
+| 1¢ lower asks, binaries only, shock ρ = 0.5 lasting days (φ = 0.8) | +0.86¢ | 2.50 | 0.2 / 1.3 | – (0) |
+| 0.5¢ lower asks, 100 events/day | +0.48¢ | 1.08 | 24.0 / 19.7 | 25.8 / 21.1 (180) |
+| YES family: 1¢ lower asks | +1.06¢ | 1.16 | 28.4 / 34.7 | 31.3 / 36.6 (175) |
+| mixed family (adds YES favorites): 1¢ lower NO asks, binaries only, shock ρ = 0.3, 100 events/day | +0.94¢ | 3.81 | **0.6 / 0.0** | – (0) |
+| makers: fills 4¢ cheaper, NO bids 5–25¢ below the truth | +3.96¢ | 1.17 | 59.8 / 56.0 | 63.5 / 58.2 (189) |
+| makers: fills 3.5¢ cheaper, NO bids 1–5¢ below the truth, 64 sweeps and news | +3.45¢ | 1.19 | 75.7 / 70.7 | **80.0 / 73.2** (183) |
+| H1-shaped: 0.75¢ lower asks, NO at YES ≤ 20¢ only, half spread 0.5¢ | +0.71¢ | 1.10 | 59.1 / 54.7 | 63.5 / 59.9 (177) |
+| H1-shaped: 1¢ lower asks, NO at YES ≤ 20¢ only, half spread 0.5¢, shock ρ = 0.5 lasting days (φ = 0.8) | +0.94¢ | 1.23 | **85.2 / 73.3** | **92.9 / 84.1** (107) |
+
+- Two one-decision taker worlds are bold where the gauntlet has almost no power: a
+  same-day shock on binaries, and the mixed family (predicted 0.7% and 0.6%, measured
+  0.0%).
+- Power is overstated in the maker 1–5¢ world (64 sweeps and news) where the cross-day
+  estimate is negative (80.0% against 73.2%), and, under a lasting shock, in the
+  H1-shaped world in both columns (85.2% against 73.3%; 92.9% against 84.1%).
+- The maker and H1-shaped rows of this table were set for 40–85% power at Holm's level,
+  and measure 54.7–73.3%, so none is re-set.
+
+So, by step 6, `gauntlet.power` is revised before any confirmation runs; every family
+of resting bids held to settlement waits for a revised method that passes every maker
+row, and H1 for one that passes every H1-shaped row, in the size table and the third.
+
+R and R̄ by row (Coupling R, above):
+
+| Row | R | R̄ from prices |
+|---|---|---|
+| makers: NO bids 5–25¢ below the truth, 16 sweeps a contract | 0.97 | 0.97 |
+| makers: NO bids 5–25¢ below the truth, shock ρ = 0.5 lasting days (φ = 0.8) | 0.96 | 0.96 |
+| makers: NO bids 1–5¢ below the truth, 64 sweeps a contract and news | 1.18 | 1.18 |
+| makers: NO bids 1–5¢ below the truth, 64 sweeps and news, shock ρ = 0.5 lasting days (φ = 0.8) | 1.18 | 1.18 |
+| makers: NO bids 1¢ below the truth only, 64 sweeps a contract and news | 1.29 | 1.29 |
+| makers: NO bids 5¢ below the truth only, 16 sweeps a contract | 1.15 | 1.15 |
+| H1-shaped: boundary, 15 daily decisions a contract | 0.45 | 0.55 |
+| H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, binaries only | 0.95 | 0.95 |
+| H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, shock ρ = 0.5 lasting days (φ = 0.8) | 1.16 | 1.57 |
+| H1-shaped: NO at YES ≤ 20¢ only, half spread 1¢ | 1.01 | 1.34 |
+| H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢ | 1.16 | 1.57 |
+| H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, ladders all strike ladders | 0.63 | 0.81 |
+
+Among the rows where the gauntlet holds its size, the largest R is 1.16 for the
+H1-shaped ones ("NO at YES ≤ 20¢ only, half spread 0.5¢") and 1.29 for the makers (1¢
+deep only): the bounds on
+a family's R̄ (the pre-registration paragraph) under the method measured here, re-set
+when a revised one is measured.
+
+Reproduce at 4baee4e with `OMP_NUM_THREADS=1 python -m
+kalshibot.research.validation.conformance` (the first two tables and R), adding `power`
+for the third. This run split the grid into eleven `--only` slices that partition its
+rows; each row is seeded by its position, so the slices give the rows of one run. It
+took 17 hours, 12.8 of them in the maker and H1-shaped rows, and 3.5 hours for the third
+table, in wall time on a cloud machine whose size wasn't recorded (branch
+`conformance-rerun-2026-10`). M2's 18 no-edge worlds
+reproduced its measurement to the last digit (their seeds are unchanged); the edge worlds
+were drawn anew, since the seam world was inserted before them in the grid, and the
+gauntlet's power there moved by up to 5.5 points (the 2¢ world, 91.5% against 97.0% at
+α = 0.05). It uses 2,000 draws per test (`conformance.GATES`); the pre-registered
+gauntlet uses 20,000 (`gauntlet.PREREGISTERED`). The p-value is valid at any count, and
+fewer draws only lose power.
 
 ## Positive control
 
