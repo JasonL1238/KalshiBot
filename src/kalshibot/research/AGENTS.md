@@ -7,7 +7,7 @@ Hypotheses and verdicts: [docs/STRATEGIES.md](../../../docs/STRATEGIES.md).
 |------|------|
 | `calendar.py` | Research windows (discovery / confirmation / lockbox / forward), the families confirmed forward (`FORWARD`), and each hypothesis's confirmation window (`confirmation_window`) |
 | `ledger.py` | Append-only trial ledger (`ledger/<family>.jsonl`, committed: trials, the confirmation's start marker, and reports on it) plus trial returns; the single lockbox unlock |
-| `load.py` | `Loader`: the only way research reads market data (one trade tape, candles, post-hoc masking, lockbox refusal), fee terms (`fee_schedule()`), the data hash trials record (`fingerprint()`), and when the tables were fetched (`fetched()`) |
+| `load.py` | `Loader`: the only way research reads market data (one trade tape, candles, post-hoc masking, lockbox refusal), fee terms (`fee_schedule()`), the data hash trials record (`fingerprint()`), when the tables were fetched (`fetched()`), and the memory-capped DuckDB connection it and the data tests use (`connect()`) |
 | `calibration.py` | Taker calibration by price paid (the favorite–longshot table; the M2 positive control) |
 | `quotes.py` | The null's prices and draws: mids from 1-minute candles, for every market of an exclusive event or the contract alone, searched for a day at a time (`needed`, `mids`); strike ladders read off Kalshi's tickers |
 | `run.py` | The research runner: `discover` (every configuration, recorded), `fetch_candles` (what the null prices from), `confirm` (the family's one confirmation test, with its power and strata), `report` (Tier 2 on it) |

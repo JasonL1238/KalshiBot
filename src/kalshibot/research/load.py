@@ -21,6 +21,8 @@ look-ahead rules are enforced in one place:
 from __future__ import annotations
 
 import hashlib
+import tempfile
+import uuid
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -62,8 +64,7 @@ class Loader:
         self.family = family  # the hypothesis family reading; gates lockbox access
         root = data_dir or default_data_dir()
         self._kalshi = root / "raw" / "kalshi"
-        self._con = duckdb.connect()
-        self._con.execute("SET TimeZone = 'UTC'")  # date casts and display in UTC
+        self._con = connect()
 
     @property
     def kalshi_dir(self) -> Path:
@@ -84,7 +85,10 @@ class Loader:
         return survivors is not None and self.family in survivors
 
     def trades(self, start: datetime, end: datetime) -> duckdb.DuckDBPyRelation:
-        """Trades with created_time in [start, end)."""
+        """Trades with created_time in [start, end). DuckDB sizes this multi-file scan from
+        its first day's file, and the tape grows, so a long window looks far smaller than it
+        is (discovery: ~200k rows for 72.5M) and a join builds its hash table on the trades.
+        Aggregate them before joining a big table."""
         start, end = _utc(start), _utc(end)
         if start < FORWARD_START and end > LOCKBOX_START and not self._lockbox_open():
             raise LockboxError(f"[{start}, {end}) overlaps the lockbox [{LOCKBOX_START}, "
@@ -178,6 +182,17 @@ class Loader:
         series = self._con.sql("SELECT series_ticker, fee_type, fee_multiplier, category "
                                f"FROM read_parquet({_sql(self._parquet('series'))})")
         return FeeSchedule(log.fetchall(), {s: (t, m, c) for s, t, m, c in series.fetchall()})
+
+
+def connect() -> duckdb.DuckDBPyConnection:
+    """A DuckDB connection in UTC (date casts and display) whose memory is capped at 4 GB,
+    not DuckDB's 80% of RAM, so bigger queries spill instead. Each connection spills to its
+    own directory under the system temp dir ($TMPDIR), not a ./.tmp shared by concurrent
+    runs; DuckDB creates it on first spill and removes it on close."""
+    spill = f"{tempfile.gettempdir()}/kalshibot-duckdb-{uuid.uuid4().hex}"
+    con = duckdb.connect(config={"memory_limit": "4GB", "temp_directory": spill})
+    con.execute("SET TimeZone = 'UTC'")
+    return con
 
 
 def _sql(value: datetime | str | Path | list) -> str:

@@ -23,15 +23,18 @@ def taker_calibration(loader: Loader, start: datetime, end: datetime, as_of: dat
     price in `bin_cents` bins: trades, contracts, avg_price and win_rate (both 0–1), and
     the gross return per dollar, win_rate / avg_price − 1."""
     width = bin_cents * PRICE_SCALE // 100
-    trades = loader.trades(start, end).set_alias("t")
+    paid = f"CASE WHEN taker_side = 'yes' THEN yes_price ELSE {PRICE_SCALE} - yes_price END"
+    # Trades are summed per market, side and bin before the join (Loader.trades says why).
+    trades = loader.trades(start, end).aggregate(f"""
+        ticker, taker_side, {paid} // {width} * {bin_cents} AS bin_cents, count(*) AS trades,
+        sum(count) AS contracts, sum(count * {paid}) AS paid""", "ALL").set_alias("t")
     markets = loader.markets(as_of).filter(BINARY_PAYOFF_KNOWN).set_alias("m")
-    paid = f"CASE WHEN t.taker_side = 'yes' THEN t.yes_price ELSE {PRICE_SCALE} - t.yes_price END"
     out = trades.join(markets, "t.ticker = m.ticker").aggregate(f"""
-        {paid} // {width} * {bin_cents} AS bin_cents,
-        count(*) AS trades,
-        sum(t.count) / {SIZE_SCALE} AS contracts,
-        sum(t.count * {paid}) / sum(t.count) / {PRICE_SCALE} AS avg_price,
-        sum(t.count * (m.result = t.taker_side)::INT) / sum(t.count) AS win_rate""",
-        f"{paid} // {width} * {bin_cents}").order("bin_cents").df()
+        t.bin_cents,
+        sum(t.trades)::BIGINT AS trades,
+        sum(t.contracts) / {SIZE_SCALE} AS contracts,
+        sum(t.paid) / sum(t.contracts) / {PRICE_SCALE} AS avg_price,
+        sum(t.contracts * (m.result = t.taker_side)::INT) / sum(t.contracts) AS win_rate""",
+        "t.bin_cents").order("bin_cents").df()
     out["gross_return"] = out["win_rate"] / out["avg_price"] - 1
     return out

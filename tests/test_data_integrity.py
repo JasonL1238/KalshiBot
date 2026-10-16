@@ -1,11 +1,8 @@
 """Cross-checks on the real data (run with local data; skipped in CI)."""
 
 import json
-import tempfile
-import uuid
 from datetime import UTC, date, datetime, timedelta
 
-import duckdb
 import pytest
 
 from kalshibot.config import data_dir
@@ -13,7 +10,7 @@ from kalshibot.data.backfill import COMBO_PREFIX
 from kalshibot.kalshi.fee_history import FeeTerms
 from kalshibot.kalshi.models import on_tick
 from kalshibot.research.calendar import BECKER_END, DISCOVERY_START
-from kalshibot.research.load import Loader
+from kalshibot.research.load import Loader, connect
 
 pytestmark = pytest.mark.data
 BECKER = data_dir() / "external" / "becker" / "data" / "kalshi" / "trades" / "*.parquet"
@@ -51,16 +48,6 @@ def api_days(before=None) -> list[str]:
 
 def api_files(days) -> list[str]:
     return [str(API / "trades" / f"date={d}" / "part.parquet") for d in days]
-
-
-def connect():
-    # DuckDB's default cap is 80% of RAM; under this one, tape-wide queries spill instead. Each
-    # connection spills to its own directory under the system temp dir ($TMPDIR), not a ./.tmp
-    # shared by concurrent runs; DuckDB creates it on first spill and removes it on close.
-    spill = f"{tempfile.gettempdir()}/kalshibot-duckdb-{uuid.uuid4().hex}"
-    con = duckdb.connect(config={"memory_limit": "4GB", "temp_directory": spill})
-    con.execute("SET TimeZone = 'UTC'")
-    return con
 
 
 def test_becker_is_an_exact_subset_of_the_api_tape_missing_only_whole_markets():
@@ -102,9 +89,7 @@ def test_every_trade_has_a_market():
     days = api_days()
     if not days or not (API / "markets.parquet").exists():
         pytest.skip("API trades or markets not downloaded yet")
-    # Trades are counted per key before the join. DuckDB sizes a multi-file scan from its first
-    # file, here an empty day, so it guesses ~1M trades and would build the join's hash table
-    # on them, one entry per trade.
+    # Trades are counted per key before the join (Loader.trades says why).
     orphans, total = connect().sql(f"""
         WITH t AS (SELECT ticker, count(*) AS n
                    FROM read_parquet({api_files(days)}, hive_partitioning = false) GROUP BY ALL)
@@ -122,7 +107,7 @@ def test_trades_sit_on_their_market_tick_grid():
     if not days or not (API / "markets.parquet").exists():
         pytest.skip("API trades or markets not downloaded yet")
     rows = connect().sql(f"""
-        WITH t AS (SELECT ticker, yes_price, count(*) AS n  -- see test_every_trade_has_a_market
+        WITH t AS (SELECT ticker, yes_price, count(*) AS n  -- see Loader.trades
                    FROM read_parquet({api_files(days)}, hive_partitioning = false) GROUP BY ALL)
         SELECT t.yes_price, m.price_ranges, sum(n)
         FROM t JOIN read_parquet('{API}/markets.parquet') m USING (ticker)
