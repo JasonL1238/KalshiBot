@@ -166,9 +166,19 @@ do what typical backtests on trade data do; Tier 1 is deliberately harsher about
 prints.
 
 Among prints sharing an instant, such as a sweep's levels, both engines count the one
-with the greatest trade_id as the last. The ids don't order an instant's prints
-([RESEARCH §1](RESEARCH.md)), so the pick is arbitrary but the same on every run. Tier 1
+with the greatest trade_id as the last (`fills.tape_order`). The ids don't order an
+instant's prints ([RESEARCH §1](RESEARCH.md)), so the pick is an arbitrary level but the
+same on every run, and an id order is what any backtest on Kalshi's API tape sees. Tier 1
 groups an instant's prints, so it needs no such rule.
+
+Within one taker side the exchange's order is known, since a sweep fills its best level
+first, but the engines don't use it: its last print, the deepest level, is the worse
+price for the orders they fill. On 2026-10-13, using it would change the book replay
+finds for 5% of orders arriving 1 s after an instant, and 6% of 1-minute closes. Against
+the ask the next taker on the order's side met (Tier 1's price), replay would fill an
+order buying what the sweep bought 1.1–1.2¢ too dear on average instead of within 0.1¢,
+and one buying the other side 1.9–2.1¢ too cheap instead of 0.8–0.9¢, with a larger mean
+absolute error in each case; bar closes and 2025-06-02 err in the same direction.
 
 Tier 1's taker fill is capped by the intent's limit but has no floor, so the next
 same-side print, up to `max_wait` later, can come far below the ask at decision time: in

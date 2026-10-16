@@ -134,15 +134,18 @@ def test_bar_limits_fill_only_within_their_price():
 
 
 # A NO taker's sweeps at the instants that set intent 1's fill: its arrival (replay) and
-# its bar's end (bars, with the tape's own print). Their ids sort after the tape's.
-SWEEP = pd.DataFrame([("KXT-A", T("2026-01-01 00:00:31"), 4060, 300, "no", "U1"),
-                      ("KXT-A", T("2026-01-01 00:00:31"), 4050, 300, "no", "U2"),
-                      ("KXT-A", T("2026-01-01 00:01:00"), 4150, 300, "no", "U3")],
+# its bar's end (bars, with the tape's own 42¢ print). At each, the greatest id is an
+# interior level, so reading a sweep deepest-last or shallowest-last fails this.
+SWEEP = pd.DataFrame([("KXT-A", T("2026-01-01 00:00:31"), 4050, 300, "no", "U1"),
+                      ("KXT-A", T("2026-01-01 00:00:31"), 4070, 300, "no", "U2"),
+                      ("KXT-A", T("2026-01-01 00:00:31"), 4060, 300, "no", "U3"),
+                      ("KXT-A", T("2026-01-01 00:01:00"), 4250, 300, "no", "U4"),
+                      ("KXT-A", T("2026-01-01 00:01:00"), 4300, 300, "no", "A5")],
                      columns=TRADES.columns)
 
 
-@pytest.mark.parametrize(("engine", "intent_1"), [(replay, {(1, 4050, 300), (1, 4051, 700)}),
-                                                  (bars, {(1, 4150, 1000)})])
+@pytest.mark.parametrize(("engine", "intent_1"), [(replay, {(1, 4060, 300), (1, 4061, 700)}),
+                                                  (bars, {(1, 4250, 1000)})])
 def test_engines_order_prints_sharing_an_instant_by_trade_id(engine, intent_1):
     tape = pd.concat([TRADES, SWEEP], ignore_index=True)
     got, again = (engine(TAKERS, t, MARKETS, series_of, SCHEDULE, END, DIRECT_MEMBER)

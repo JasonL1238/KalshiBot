@@ -27,7 +27,7 @@ import vectorbt as vbt
 
 from kalshibot.kalshi.fee_history import FeeSchedule
 from kalshibot.kalshi.models import MICROS, PRICE_SCALE, SIZE_SCALE
-from kalshibot.research.backtest.fills import no_fills
+from kalshibot.research.backtest.fills import no_fills, tape_order
 from kalshibot.research.backtest.settle import charged_fee, settled, yes_payoff
 
 BAR = pd.Timedelta(1, unit="min")
@@ -49,8 +49,8 @@ def bars(intents: pd.DataFrame, trades: pd.DataFrame, markets: pd.DataFrame,
     orders = orders[(orders["bar"] < end) & ~closed.fillna(False).astype(bool)]
 
     # the close at every order bar: the last print at or before the bar's end
-    tape = trades.assign(created_time=pd.to_datetime(trades["created_time"], utc=True)
-                         .dt.as_unit("ns")).sort_values(["created_time", "trade_id"])
+    tape = tape_order(trades.assign(
+        created_time=pd.to_datetime(trades["created_time"], utc=True).dt.as_unit("ns")))
     last = pd.merge_asof(orders[["ticker", "bar"]].drop_duplicates().sort_values("bar"),
                          tape[["ticker", "created_time", "yes_price"]],
                          left_on="bar", right_on="created_time", by="ticker")

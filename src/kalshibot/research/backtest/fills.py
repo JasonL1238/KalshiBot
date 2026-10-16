@@ -46,6 +46,11 @@ def no_fills() -> tuple[pd.DataFrame, pd.DataFrame]:
     return pd.DataFrame(columns=FILL_COLUMNS), pd.DataFrame(columns=["ticker", "pnl"])
 
 
+def tape_order(trades: pd.DataFrame) -> pd.DataFrame:
+    """`trades` in the order the Tier-2 engines read them (docs/BACKTESTING.md, Fill models)."""
+    return trades.sort_values(["created_time", "trade_id"])
+
+
 def taker_fills(con: duckdb.DuckDBPyConnection, intents: str, trades: str,
                 latency: timedelta = timedelta(seconds=1),
                 max_wait: timedelta = timedelta(minutes=5),

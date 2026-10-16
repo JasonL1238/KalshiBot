@@ -53,7 +53,7 @@ from nautilus_trader.trading.strategy import Strategy
 
 from kalshibot.kalshi.fee_history import FeeSchedule
 from kalshibot.kalshi.models import MICROS, PRICE_SCALE, SIZE_SCALE
-from kalshibot.research.backtest.fills import no_fills
+from kalshibot.research.backtest.fills import no_fills, tape_order
 from kalshibot.research.backtest.settle import charged_fee, settled, yes_payoff
 
 KALSHI = Venue("KALSHI")
@@ -153,7 +153,7 @@ def replay(intents: pd.DataFrame, trades: pd.DataFrame, markets: pd.DataFrame,
                      trade_execution=True, bar_execution=False)
     for instrument in instruments.values():
         engine.add_instrument(instrument)
-    tape = trades[trades["ticker"].isin(tickers)].sort_values(["created_time", "trade_id"])
+    tape = tape_order(trades[trades["ticker"].isin(tickers)])
     data = [TradeTick(instruments[r.ticker].id, Price(r.yes_price / PRICE_SCALE, 4),
                       Quantity(r.count / SIZE_SCALE, 2),
                       AggressorSide.BUYER if r.taker_side == "yes" else AggressorSide.SELLER,
