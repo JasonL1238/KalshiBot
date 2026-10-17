@@ -34,3 +34,4 @@ unchanged-h1-0.1 rc=0 wall=615s args=0.1 --only 'H1-shaped: NO at YES ≤ 20¢ o
 unchanged-power-taker-0.1 rc=0 wall=189s args=power 0.1 --only '1¢ lower asks'
 unchanged-power-h1-0.1 rc=0 wall=226s args=power 0.1 --only 'H1-shaped: 0.75'
 final-makers-1.0 rc=0 wall=25488s args=1.0 --only makers:
+final-power-makers-1.0 rc=0 wall=3585s args=power 1.0 --only makers:
