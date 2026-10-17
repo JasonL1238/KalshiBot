@@ -50,7 +50,7 @@ class Gates:
 
 # docs/BACKTESTING.md, step 6: the null's nested intervals, then the candidates for a
 # maker's fills (`_for_makers`, `null._clusters`' exact, `null.dependence`'s centre)
-MAKER_METHODS = ("nested", "one_interval", "exact", "centred")
+MAKER_METHODS = ("nested", "one_interval", "exact", "centred", "exact+centred")
 PREREGISTERED = Gates()
 
 
@@ -182,7 +182,7 @@ def _null(d: Positions, p: Positions, rng: np.random.Generator, gates: Gates
     """The dependence estimated on discovery positions `d`, the widening it implies for
     confirmation positions `p`, and `p`'s null totals (not yet widened)."""
     terms = _exact(d, gates)
-    if gates.makers == "centred" and d.makes:
+    if "centred" in gates.makers.split("+") and d.makes:
         terms["centre"] = np.where(d.maker, d.break_even,
                                    np.where(d.buy_yes, d.p_yes, 1 - d.p_yes))
     dep = null.dependence(d.won, d.buy_yes, d.count, d.p_yes, d.lo, d.hi, d.cluster, d.day,
@@ -218,9 +218,9 @@ def _one_interval(lo: np.ndarray, hi: np.ndarray, p: Positions
 
 
 def _exact(p: Positions, gates: Gates) -> dict:
-    """`null._clusters`' exact and order for `p` under `gates.makers` (none unless "exact"
-    and `p` has maker fills)."""
-    if gates.makers != "exact" or not p.makes:
+    """`null._clusters`' exact and order for `p` under `gates.makers` (none unless it
+    includes "exact" and `p` has maker fills)."""
+    if "exact" not in gates.makers.split("+") or not p.makes:
         return {}
     return {"exact": p.maker, "order": p.order}
 
