@@ -175,7 +175,7 @@ def _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact=Non
     cluster, its boundary variance is instead the exact one of positions that all settle
     on one outcome, each covarying with every earlier one (by `order`, default as given)
     by its own boundary variance v, the larger of its null and break-even variances:
-    Σ_b v_b·s_b·(s_b + 2 Σ_{a before b} s_a), s the signed counts (`_exact`)."""
+    Σ_b v_b·s_b·(s_b + 2 Σ_{a before b} s_a), s the signed counts (`_shared_outcome_variance`)."""
     sign = np.where(buy_yes, 1.0, -1.0) * count  # won × count = constant + sign × YES
     win = np.where(buy_yes, p_yes, 1 - p_yes)
     df = pd.DataFrame({"cluster": cluster, "day": day, "lo": lo, "hi": hi, "sign": sign,
@@ -199,13 +199,13 @@ def _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact=Non
         whole = pd.Series(np.asarray(exact, bool)).groupby(df["cluster"]).all()
         rows = df["cluster"].map(whole).to_numpy()
         order = np.arange(len(df)) if order is None else np.asarray(order)
-        var = _exact(df[rows], order[rows])
+        var = _shared_outcome_variance(df[rows], order[rows])
         out.loc[var.index, "var_b"] = var.clip(lower=0)
     out["direction"] = np.where(out["sign"] >= 0, 1.0, -1.0)
     return out
 
 
-def _exact(df: pd.DataFrame, order: np.ndarray) -> pd.Series:
+def _shared_outcome_variance(df: pd.DataFrame, order: np.ndarray) -> pd.Series:
     """Per cluster of `_clusters`' rows `df`, the boundary variance of positions sharing
     one outcome (`_clusters`, `exact`), in `order` within each cluster."""
     df = df.assign(order=order).sort_values(["cluster", "order"], kind="stable")
@@ -235,8 +235,8 @@ def _calendar(series: pd.Series) -> np.ndarray:
 
 def dependence(won: np.ndarray, buy_yes: np.ndarray, count: np.ndarray, p_yes: np.ndarray,
                lo: np.ndarray, hi: np.ndarray, cluster: np.ndarray, day: np.ndarray,
-               break_even: np.ndarray, centre: np.ndarray | None = None, exact=None,
-               order=None) -> Dependence:
+               break_even: np.ndarray, exact=None, order=None, flat: bool = False
+               ) -> Dependence:
     """Estimate the YES-direction correlations from realized outcomes, by the method of
     moments. Each cluster's surprise x, the sum of (won − P_null(won)) × count over its
     positions less k times its variance (k = Σx / Σv removes any edge in proportion), is
@@ -245,35 +245,46 @@ def dependence(won: np.ndarray, buy_yes: np.ndarray, count: np.ndarray, p_yes: n
     D days on which clusters settle) c_h = Σ_d Y_d Y_{d+h} / Σ_d S_d S_{d+h}, with Y_d and
     S_d a day's sums of y and s (zero on days without clusters); all clipped to [−1, 1]
     (ρ to [0, 1]). Estimate on positions the test doesn't score, over long stretches of
-    discovery, and broadly (every configuration's). `centre`, if given, is each
-    position's P(won) to take surprises from instead of the null's; `exact` and `order`
-    go to `_clusters`. With `blocks` = B > 1, also the B delete-a-block jackknife
-    replicates: the same estimate with each of B contiguous runs of days dropped in turn
-    (`jackknife`)."""
-    clusters = _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact,
-                         order)
-    expected = np.where(buy_yes, p_yes, 1 - p_yes) if centre is None else centre
-    surprise = (np.asarray(won, dtype=float) - expected) * count
-    x = pd.Series(surprise).groupby(np.asarray(cluster)).sum().reindex(clusters.index)
-    return _moments(clusters, x)
+    discovery, and broadly (every configuration's). `exact` and `order` go to
+    `_clusters`; `flat` to the result (`Dependence.weight`)."""
+    return _moments(*_surprises(won, buy_yes, count, p_yes, lo, hi, cluster, day,
+                                break_even, exact, order), flat)
 
 
 def jackknife(won, buy_yes, count, p_yes, lo, hi, cluster, day, break_even, blocks: int,
-              centre=None, exact=None, order=None) -> list[Dependence]:
+              exact=None, order=None, flat: bool = False) -> list[Dependence]:
     """`dependence` re-estimated with each of `blocks` contiguous runs of the clusters'
-    days dropped in turn (`_clusters` once, then only the moments)."""
-    clusters = _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact,
-                         order)
-    expected = np.where(buy_yes, p_yes, 1 - p_yes) if centre is None else centre
-    surprise = (np.asarray(won, dtype=float) - expected) * count
-    x = pd.Series(surprise).groupby(np.asarray(cluster)).sum().reindex(clusters.index)
+    calendar days dropped in turn (`_clusters` once, then only the moments), skipping
+    runs without a cluster. A replicate has fewer days, so H can be one lag shorter."""
+    clusters, x = _surprises(won, buy_yes, count, p_yes, lo, hi, cluster, day, break_even,
+                             exact, order)
     days = clusters["day"].to_numpy()
     edges = np.linspace(days.min(), days.max() + 1, blocks + 1)
     block = np.searchsorted(edges, days, side="right") - 1
-    return [_moments(clusters[block != b], x[block != b]) for b in range(blocks)]
+    return [_moments(clusters[block != b], x[block != b], flat) for b in np.unique(block)]
 
 
-def _moments(clusters: pd.DataFrame, x: pd.Series) -> Dependence:
+def jackknife_se(replicates: list[Dependence], buy_yes, count, p_yes, lo, hi, cluster, day,
+                 break_even, exact=None, order=None) -> float:
+    """The delete-a-block jackknife standard error of `widening` for these positions over
+    `jackknife`'s replicates: √((B − 1)/B · Σ_b (W_b − W̄)²); 0 with fewer than 2."""
+    days = _days(_clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact,
+                           order))
+    w = np.array([_factor(dep, days) for dep in replicates])
+    return float(np.sqrt(len(w) - 1) * w.std()) if len(w) > 1 else 0.0
+
+
+def _surprises(won, buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact, order
+               ) -> tuple[pd.DataFrame, pd.Series]:
+    """`_clusters`' output and each cluster's summed surprise (won − P_null(won)) × count."""
+    clusters = _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact,
+                         order)
+    surprise = (np.asarray(won, dtype=float) - np.where(buy_yes, p_yes, 1 - p_yes)) * count
+    x = pd.Series(surprise).groupby(np.asarray(cluster)).sum().reindex(clusters.index)
+    return clusters, x
+
+
+def _moments(clusters: pd.DataFrame, x: pd.Series, flat: bool = False) -> Dependence:
     """`dependence`'s estimate from `_clusters`' output and each cluster's surprise x."""
     total = clusters["var_b"].sum()
     if total <= 0 or clusters["day"].nunique() < 2:
@@ -290,22 +301,18 @@ def _moments(clusters: pd.DataFrame, x: pd.Series) -> Dependence:
     with np.errstate(all="ignore"):  # macOS Accelerate raises spurious flags in matmul
         cross = tuple(float(np.clip(ys[:-h] @ ys[h:] / den, -1, 1))
                       if (den := ss[:-h] @ ss[h:]) > 0 else 0.0 for h in range(1, lags + 1))
-    return Dependence(rho, cross)
+    return Dependence(rho, cross, flat)
 
 
 def widening(dep: Dependence, buy_yes: np.ndarray, count: np.ndarray, p_yes: np.ndarray,
              lo: np.ndarray, hi: np.ndarray, cluster: np.ndarray, day: np.ndarray,
              break_even: np.ndarray, exact=None, order=None) -> float:
     """The factor (≥ 1) by which the null's variance must grow for these positions:
-    (ΣV + ρ·ΣW + 2 Σ_h w_h c_h Σ_d A_d A_{d+h}) / ΣV0 (`Dependence.weight`) over this sample's own
-    days (`_days`), never below the break-even variance ΣV, even where YES and NO
-    positions offset. `exact` and `order` go to `_clusters`; a list of `dep`s gives a
-    list of factors, from `_clusters` once."""
-    days = _days(_clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact,
-                           order))
-    if isinstance(dep, list):
-        return [_factor(d, days) for d in dep]
-    return _factor(dep, days)
+    (ΣV + ρ·ΣW + 2 Σ_h w_h c_h Σ_d A_d A_{d+h}) / ΣV0 (w_h: `Dependence.weight`) over
+    this sample's own days (`_days`), never below the break-even variance ΣV, even where
+    YES and NO positions offset. `exact` and `order` go to `_clusters`."""
+    return _factor(dep, _days(_clusters(buy_yes, count, p_yes, lo, hi, cluster, day,
+                                        break_even, exact, order)))
 
 
 def _factor(dep: Dependence, days: pd.DataFrame) -> float:

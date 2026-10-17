@@ -169,40 +169,46 @@ def test_evaluate_refuses_inputs_outside_the_nulls_scope():
             gauntlet.evaluate(discovery, disc, daily, bad, RNG, gauntlet.Gates(draws=50))
 
 
-def test_maker_methods_are_named():
-    with pytest.raises(ValueError, match="makers must be one of"):
-        gauntlet.Gates(makers="unknown")
+def maker_sample(rng, n, days, first_day=0, per_contract=4):
+    """Fair NO bids filled `per_contract` times on each of n contracts, at drifting prices."""
+    contracts = n // per_contract
+    p0 = rng.uniform(0.05, 0.3, contracts)
+    p_yes = np.clip(np.repeat(p0, per_contract) + rng.normal(0, 0.02, n), 0.01, 0.5)
+    yes = np.repeat(rng.random(contracts) < p0, per_contract)
+    paid = ((1 - p_yes) * 1_000_000).round()
+    return gauntlet.Positions(
+        net_pnl=np.where(yes, 0, 1_000_000) - paid, paid=paid, won=~yes,
+        buy_yes=np.zeros(n, bool), count=np.full(n, 100), p_yes=p_yes, lo=np.zeros(n),
+        hi=p_yes, cluster=np.repeat(np.arange(contracts), per_contract),
+        day=first_day + np.repeat(np.arange(contracts) % days, per_contract),
+        maker=np.ones(n, bool), order=np.arange(n))
 
 
-@pytest.mark.parametrize("makers", sorted(gauntlet.MAKER_METHODS))
-def test_maker_methods_leave_other_positions_alone(makers):
-    """A taker's positions, flagged or not, get the same verdict under every method."""
+def test_a_takers_positions_flagged_as_not_maker_are_unchanged():
     rng = np.random.default_rng(5)
     disc, conf = positions(3000, 300, 0.0, rng), positions(600, 60, 0.02, rng, first_day=300)
-    returns = pd.DataFrame({"a": rng.normal(0, 1, 300)})
-    daily = pd.Series(rng.normal(0, 1, 60))
+    returns, daily = pd.DataFrame({"a": rng.normal(0, 1, 300)}), pd.Series(rng.normal(0, 1, 60))
     flagged = [replace(p, maker=np.zeros(len(p.day), bool)) for p in (disc, conf)]
     gates = replace(GATES, draws=500)
-    nested = gauntlet.evaluate(returns, disc, daily, conf, np.random.default_rng(1), gates)
-    other = gauntlet.evaluate(returns, *flagged[:1], daily, flagged[1],
-                              np.random.default_rng(1), replace(gates, makers=makers))
-    assert repr(other) == repr(nested)  # pbo is NaN with one configuration
+    plain = gauntlet.evaluate(returns, disc, daily, conf, np.random.default_rng(1), gates)
+    other = gauntlet.evaluate(returns, flagged[0], daily, flagged[1],
+                              np.random.default_rng(1), gates)
+    assert repr(other) == repr(plain)  # pbo is NaN with one configuration
 
 
-def test_one_interval_puts_a_contracts_fills_on_one_interval_and_keeps_their_centre():
-    p = gauntlet.Positions(
-        net_pnl=np.zeros(4), paid=np.full(4, 800_000.0), won=np.zeros(4),
-        buy_yes=np.zeros(4, bool), count=np.array([1, 3, 1, 1]),
-        p_yes=np.array([0.1, 0.2, 0.3, 0.4]), lo=np.zeros(4),
-        hi=np.array([0.1, 0.2, 0.3, 0.4]), cluster=np.array([0, 0, 1, 2]),
-        day=np.zeros(4, int), maker=np.array([True, True, True, False]))
-    merged = gauntlet._for_makers(p, replace(GATES, makers="one_interval"))
-    assert merged.hi[:2] == pytest.approx([0.175, 0.175])  # (0.1 + 3 × 0.2) / 4
-    assert (merged.p_yes * merged.count)[:2].sum() == pytest.approx((p.p_yes * p.count)[:2].sum())
-    assert merged.hi[2:] == pytest.approx(p.hi[2:])  # alone on its contract; not a maker
-    with pytest.raises(ValueError, match="standalone"):
-        gauntlet._for_makers(replace(p, lo=np.full(4, 0.05), hi=p.hi + 0.05),
-                             replace(GATES, makers="one_interval"))
+def test_a_makers_null_widens_for_fills_sharing_an_outcome_and_its_own_noise():
+    """Flagged as maker fills, the same positions get the exact covariance of fills on one
+    contract and the jackknife SE on top: a wider null, never a narrower one."""
+    rng = np.random.default_rng(6)
+    disc, conf = maker_sample(rng, 4000, 200), maker_sample(rng, 800, 40, first_day=200)
+    plain = [replace(p, maker=None) for p in (disc, conf)]
+    _, as_taker, _ = gauntlet._null(*plain, np.random.default_rng(1), GATES)
+    dep, as_maker, _ = gauntlet._null(disc, conf, np.random.default_rng(1), GATES)
+    point = null.widening(dep, conf.buy_yes, conf.count, conf.p_yes, conf.lo, conf.hi,
+                          conf.cluster, conf.day, conf.break_even, exact=conf.maker,
+                          order=conf.order)
+    assert dep.flat and point > as_taker  # the exact covariance alone widens it
+    assert as_maker >= point  # the jackknife SE only adds (0 here: every replicate floors)
 
 
 def test_maker_fills_must_stay_on_standalone_contracts():
@@ -212,13 +218,3 @@ def test_maker_fills_must_stay_on_standalone_contracts():
     with pytest.raises(ValueError, match="standalone"):
         gauntlet.Positions.from_frame(frame)
     assert gauntlet.Positions.from_frame(frame.assign(maker=False)).maker.sum() == 0
-
-
-def test_one_interval_leaves_a_takers_rows_exactly_as_they_were():
-    p = gauntlet.Positions(
-        net_pnl=np.zeros(3), paid=np.full(3, 800_000.0), won=np.zeros(3),
-        buy_yes=np.zeros(3, bool), count=np.ones(3), p_yes=np.array([0.1, 0.2, 0.3]),
-        lo=np.array([0.0, 0.0, 0.7]), hi=np.array([0.1, 0.2, 1.0]),
-        cluster=np.array([0, 0, 1]), day=np.zeros(3, int), maker=np.array([True, True, False]))
-    merged = gauntlet._for_makers(p, replace(GATES, makers="one_interval"))
-    assert merged.p_yes[2] == p.p_yes[2] and merged.lo[2] == p.lo[2] and merged.hi[2] == p.hi[2]

@@ -17,11 +17,11 @@ Hypotheses and verdicts: [docs/STRATEGIES.md](../../../docs/STRATEGIES.md).
 | `backtest/replay.py` | Tier 2: NautilusTrader replays the tape and fills taker intents its own way; returns fills plus its own PnL |
 | `backtest/bars.py` | Tier 2: vectorbt fills taker intents at 1-minute bar closes; returns fills plus its own PnL |
 | `validation/` | Anti-overfitting statistics and the measurements behind the gates |
-| `validation/null.py` | Market-calibrated null: inputs from de-vigged mids (multiplicative/Shin), cluster-coherent outcome draws, recentered PnL, same-day and cross-day dependence and the widening they imply, p-values |
+| `validation/null.py` | Market-calibrated null: inputs from de-vigged mids (multiplicative/Shin), cluster-coherent outcome draws, recentered PnL, same-day and cross-day dependence and the widening they imply (for a resting bid's fills: their exact covariance on one outcome, flat cross-day weights, and the widening's jackknife SE), p-values |
 | `validation/stats.py` | PSR/DSR, effective trial count (ONC base step), PBO via CSCV, stationary-bootstrap p-value, Romano–Wolf step-down, Holm |
-| `validation/gauntlet.py` | The pre-registered decision procedure (`Gates`): discovery selection, the dependence sample, the confirmation test and its power, Holm across families (forward ones at their own α/12); diagnostics |
+| `validation/gauntlet.py` | The pre-registered decision procedure (`Gates`): discovery selection, the dependence sample, the confirmation test and its power (a sample with maker fills gets the maker null; their contracts must be standalone), Holm across families (forward ones at their own α/12); diagnostics |
 | `validation/synthetic.py` | Synthetic worlds with a known truth (boundary null for YES or NO buyers, planted edges, same-day shocks that can last for days; for resting bids, price paths swept at the boundary; for repeated taker decisions, snapshots of posterior truths through a contract's day) |
-| `validation/conformance.py` | Size and power of every candidate procedure on those worlds (the grid behind the gate choice; `--only` runs rows by label prefix), a check of `gauntlet.power`, and the coupling ratios R and R̄ of repeated positions (makers, H1-shaped) |
+| `validation/conformance.py` | Size and power of every candidate procedure on those worlds (the grid behind the gate choice; `--only` runs rows by label prefix), a check of `gauntlet.power`, and the coupling ratios R and R̄ of repeated positions (makers, H1-shaped); the last rows are maker worlds held out from choosing the maker null (`--only makers:` skips them) |
 
 ## Rules for code here
 

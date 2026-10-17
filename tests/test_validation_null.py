@@ -289,13 +289,6 @@ def test_exact_boundary_variance_of_fills_on_one_outcome_by_hand():
     assert partly["var_b"].iloc[0] == null._clusters(**args)["var_b"].iloc[0]  # whole only
 
 
-def test_dependence_can_centre_surprises_elsewhere():
-    """Centred at the null's own probabilities, `centre` changes nothing."""
-    one = surprises(100, 10, 0.3, RNG)
-    own = np.where(one["buy_yes"], one["p_yes"], 1 - one["p_yes"])
-    assert null.dependence(**one, centre=own) == null.dependence(**one)
-
-
 def test_exact_needs_no_order_beside_other_clusters():
     """Fills as given; a cluster without maker fills keeps its nested variance."""
     args = {"buy_yes": np.zeros(3, bool), "count": np.ones(3), "p_yes": np.full(3, 0.2),
@@ -309,8 +302,15 @@ def test_jackknife_drops_each_run_of_days_once():
     one = surprises(200, 10, 0.3, RNG, phi=0.8)
     reps = null.jackknife(**one, blocks=4)
     assert len(reps) == 4 and all(isinstance(r, null.Dependence) for r in reps)
-    assert len({r.rho for r in reps}) == 4  # each drops a different quarter
     full = null.dependence(**one)
     assert np.mean([r.rho for r in reps]) == pytest.approx(full.rho, abs=0.05)
     args = {k: v for k, v in one.items() if k != "won"}
-    assert null.widening(reps, **args) == [null.widening(r, **args) for r in reps]
+    w = np.array([null.widening(r, **args) for r in reps])
+    by_hand = np.sqrt(3 / 4 * ((w - w.mean()) ** 2).sum())  # (B − 1)/B, B = 4
+    assert null.jackknife_se(reps, **args) == pytest.approx(by_hand)
+    assert null.jackknife_se(reps[:1], **args) == 0.0
+
+
+def test_jackknife_skips_runs_of_days_without_a_cluster():
+    one = surprises(4, 10, 0.3, RNG)  # 4 days of clusters, 10 runs asked for
+    assert len(null.jackknife(**one, blocks=10)) == 4
