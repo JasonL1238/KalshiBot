@@ -303,3 +303,14 @@ def test_exact_needs_no_order_beside_other_clusters():
             "day": np.zeros(3, int), "break_even": np.full(3, 0.8)}
     exact = null._clusters(**args, exact=np.array([True, True, False]))
     assert exact["var_b"].to_numpy() == pytest.approx([4 * 0.16, 0.16])
+
+
+def test_jackknife_drops_each_run_of_days_once():
+    one = surprises(200, 10, 0.3, RNG, phi=0.8)
+    reps = null.jackknife(**one, blocks=4)
+    assert len(reps) == 4 and all(isinstance(r, null.Dependence) for r in reps)
+    assert len({r.rho for r in reps}) == 4  # each drops a different quarter
+    full = null.dependence(**one)
+    assert np.mean([r.rho for r in reps]) == pytest.approx(full.rho, abs=0.05)
+    args = {k: v for k, v in one.items() if k != "won"}
+    assert null.widening(reps, **args) == [null.widening(r, **args) for r in reps]

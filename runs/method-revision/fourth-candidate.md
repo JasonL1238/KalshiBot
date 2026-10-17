@@ -98,3 +98,7 @@ Only samples with maker fills get it; takers and H1-shaped samples don't change.
 Risks: delete-a-block jackknife SE is itself noisy with 10 blocks, and dropping a block
 leaves a gap of zero days in the calendar (lag products across the gap are lost, a
 slight downward bias in each replicate's c_h).
+
+Checked on one world of each stress row before the screen: the margin is about ×1.33 with
+a lasting shock (4.81 to 6.38) and ×1.24 without one (1.39 to 1.72). That is more than
+"barely moves" for the row without a shock, so expect a power cost there.

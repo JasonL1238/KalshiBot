@@ -247,12 +247,34 @@ def dependence(won: np.ndarray, buy_yes: np.ndarray, count: np.ndarray, p_yes: n
     (ρ to [0, 1]). Estimate on positions the test doesn't score, over long stretches of
     discovery, and broadly (every configuration's). `centre`, if given, is each
     position's P(won) to take surprises from instead of the null's; `exact` and `order`
-    go to `_clusters`."""
+    go to `_clusters`. With `blocks` = B > 1, also the B delete-a-block jackknife
+    replicates: the same estimate with each of B contiguous runs of days dropped in turn
+    (`jackknife`)."""
     clusters = _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact,
                          order)
     expected = np.where(buy_yes, p_yes, 1 - p_yes) if centre is None else centre
     surprise = (np.asarray(won, dtype=float) - expected) * count
     x = pd.Series(surprise).groupby(np.asarray(cluster)).sum().reindex(clusters.index)
+    return _moments(clusters, x)
+
+
+def jackknife(won, buy_yes, count, p_yes, lo, hi, cluster, day, break_even, blocks: int,
+              centre=None, exact=None, order=None) -> list[Dependence]:
+    """`dependence` re-estimated with each of `blocks` contiguous runs of the clusters'
+    days dropped in turn (`_clusters` once, then only the moments)."""
+    clusters = _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact,
+                         order)
+    expected = np.where(buy_yes, p_yes, 1 - p_yes) if centre is None else centre
+    surprise = (np.asarray(won, dtype=float) - expected) * count
+    x = pd.Series(surprise).groupby(np.asarray(cluster)).sum().reindex(clusters.index)
+    days = clusters["day"].to_numpy()
+    edges = np.linspace(days.min(), days.max() + 1, blocks + 1)
+    block = np.searchsorted(edges, days, side="right") - 1
+    return [_moments(clusters[block != b], x[block != b]) for b in range(blocks)]
+
+
+def _moments(clusters: pd.DataFrame, x: pd.Series) -> Dependence:
+    """`dependence`'s estimate from `_clusters`' output and each cluster's surprise x."""
     total = clusters["var_b"].sum()
     if total <= 0 or clusters["day"].nunique() < 2:
         return Dependence(0.0, ())
@@ -277,9 +299,17 @@ def widening(dep: Dependence, buy_yes: np.ndarray, count: np.ndarray, p_yes: np.
     """The factor (≥ 1) by which the null's variance must grow for these positions:
     (ΣV + ρ·ΣW + 2 Σ_h w_h c_h Σ_d A_d A_{d+h}) / ΣV0 (`Dependence.weight`) over this sample's own
     days (`_days`), never below the break-even variance ΣV, even where YES and NO
-    positions offset. `exact` and `order` go to `_clusters`."""
+    positions offset. `exact` and `order` go to `_clusters`; a list of `dep`s gives a
+    list of factors, from `_clusters` once."""
     days = _days(_clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact,
                            order))
+    if isinstance(dep, list):
+        return [_factor(d, days) for d in dep]
+    return _factor(dep, days)
+
+
+def _factor(dep: Dependence, days: pd.DataFrame) -> float:
+    """`widening`'s factor from `_days`' output."""
     null_var, boundary = days["V0"].sum(), days["V"].sum()
     if null_var <= 0:
         return 1.0
