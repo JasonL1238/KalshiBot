@@ -1,0 +1,13 @@
+boundary: done
+boundary, 100 events/day: done
+boundary, Shin de-vig: done
+boundary, same-day shock ρ = 0.5: done
+boundary, binaries only, shock ρ = 0.5: done
+boundary, binaries only, shock ρ = 0.8, half spread 0.5¢: done
+boundary, binaries only, shock ρ = 0.3, half spread 0.5¢, 100 events/day: done
+boundary, binaries only, shock ρ = 0.5, confirmation twice as busy: done
+boundary, binaries only, shock ρ = 0.5 lasting days (φ = 0.5): done
+boundary, binaries only, shock ρ = 0.5 lasting days (φ = 0.8): done
+boundary, binaries only, shock ρ = 0.5 lasting days (φ = 0.8), confirmation twice as busy: done
+boundary, ladders all strike ladders, same-day shock ρ = 0.5: done
+boundary, binaries only, shock ρ = 0.5 from the seam on (none in discovery): done
