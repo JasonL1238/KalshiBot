@@ -24,3 +24,5 @@ CHAIN2DONE
 exact+flat-makers-0.25 rc=0 wall=4027s args=0.25 --only makers: --makers exact+flat
 exact+flat-power-makers-0.25 rc=0 wall=678s args=power 0.25 --only makers: --makers exact+flat
 CHAIN3DONE
+exact+flat+jackknife-makers-0.25 rc=0 wall=6555s args=0.25 --only makers: --makers exact+flat+jackknife
+exact+flat+jackknife-power-makers-0.25 rc=0 wall=1014s args=power 0.25 --only makers: --makers exact+flat+jackknife
