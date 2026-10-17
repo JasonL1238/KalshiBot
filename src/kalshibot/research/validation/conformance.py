@@ -374,6 +374,13 @@ GRID = [  # (label, worlds, one_world settings); no edge unless the label says s
     ("H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢", 2000, H1_COUPLED),
     ("H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, ladders all strike ladders", 2000,
      {**H1_COUPLED, "strike_share": 1.0}),
+    # held out from the maker method's choice (`--only makers:` skips them), seeds fixed first
+    ("makers (held out): NO bids 1–5¢ below the truth, 64 sweeps and news, shock ρ = 0.5 "
+     "lasting days (φ = 0.5)", 2000, {**MAKERS_STRESS, "shock": 0.5, "persistence": 0.5}),
+    ("makers (held out): NO bids 1–5¢ below the truth, 64 sweeps and news, shock ρ = 0.3 "
+     "lasting days (φ = 0.8)", 2000, {**MAKERS_STRESS, "shock": 0.3, "persistence": 0.8}),
+    ("makers (held out): NO bids 5–25¢ below the truth, 16 sweeps and news, shock ρ = 0.5 "
+     "lasting days (φ = 0.8)", 2000, {**MAKERS, "news": 0.1, "shock": 0.5, "persistence": 0.8}),
 ]
 POWER_COLUMNS = ["naive in-sample", "null", "null + DSR", "null + DSR + PBO", "Romano–Wolf",
                  "widened null", "gauntlet"]
