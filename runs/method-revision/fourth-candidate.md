@@ -53,3 +53,48 @@ un-bold, as under `exact`.
 
 Risk: the flat sum of 20 noisy c_h is noisier than the Bartlett sum. Worlds where it
 comes out low still under-widen, so size may improve less than the mean suggests.
+
+## Result of exact+flat, and the noise that remains
+
+Screened at 0.25 (`exact+flat-makers-0.25.md`): the failing row's mean widening rose to
+13.8, as predicted (the oracle's is 13.9), but its size is still 7.4% / 1.0% against
+6.95% / 0.99%. Every other maker row holds, and both power predictions stay un-bold.
+
+400-world diagnosis under exact+flat (`diag-exact+flat.txt`):
+
+| | value |
+|---|---|
+| estimated / oracle widening, per world | mean 0.92, sd 0.38 (10th percentile 0.50, 90th 1.41) |
+| P(z > 1.645), estimated widening | 4.5% (oracle: 2.75%) |
+| P(z > 2.64), Holm's level | 1.5% (oracle: 0.25%) |
+| P(z > 1.645) in the half of worlds with the lower ratio | 7.5% (the upper half: 1.5%) |
+
+The bias is fixed, so what remains is noise: a cross-day sum estimated from 400 days of
+a persistent shock varies by about 38% from world to world, and the low draws
+under-widen. A fixed inflation (about 1.3 here) would be tuned to this row.
+
+## Fifth step: exact+flat+jackknife
+
+Widen by the estimate plus one standard error of its own sampling noise: the
+delete-a-block jackknife over discovery days (10 contiguous blocks of discovery's
+dependence sample, each dropped in turn; SE² = (B − 1)/B · Σ_b (W_(−b) − W̄)², W the
+widening each replicate implies for the confirmation positions). The null then uses
+W + SE, never below W.
+
+Why it should work: the margin scales with each world's own uncertainty. Where shocks
+persist, SE is large (the per-world sd of W is about 38% of W), so the margin is about
+1.3–1.4 on average, which the table puts at P(z > 1.645) ≈ 3% and P(z > 2.64) ≈ 0.25%.
+Where there is no lasting shock, W is mostly boundary variance and barely moves between
+replicates, so the margin and the power cost are small.
+
+Power: `gauntlet.power` keeps simulating its worlds with the point estimate (its best
+guess of the truth) and tests them against the null widened to W + SE, as the real test
+is. So the prediction pays for the margin, as the gauntlet does, and should stay
+un-bold.
+
+Only samples with maker fills get it; takers and H1-shaped samples don't change. Cost:
+`_clusters` runs once per sample, and each replicate recomputes only the moment sums.
+
+Risks: delete-a-block jackknife SE is itself noisy with 10 blocks, and dropping a block
+leaves a gap of zero days in the calendar (lag products across the gap are lost, a
+slight downward bias in each replicate's c_h).
