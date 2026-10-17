@@ -50,7 +50,7 @@ class Gates:
 
 # docs/BACKTESTING.md, step 6: the null's nested intervals, then the candidates for a
 # maker's fills (`_for_makers`, `null._clusters`' exact, `null.dependence`'s centre)
-MAKER_METHODS = ("nested", "one_interval", "exact", "centred", "exact+centred")
+MAKER_METHODS = ("nested", "one_interval", "exact", "centred", "exact+centred", "exact+flat")
 PREREGISTERED = Gates()
 
 
@@ -127,7 +127,7 @@ class Verdict:
     p_boot: float  # stationary bootstrap of confirmation daily returns
     p_independent: float  # diagnostic: the null without the widening
     rho: float  # same-day YES correlation between clusters, estimated on discovery
-    cross_day: float  # Bartlett-weighted cross-day correlations, estimated on discovery
+    cross_day: float  # weighted cross-day correlations (`null.Dependence.weight`), discovery
     widening: float  # null variance factor applied (1: none)
     dsr: float  # diagnostic: the selected config's discovery Sharpe, deflated for trials
     pbo: float  # diagnostic: overfitting of the discovery selection
@@ -187,6 +187,8 @@ def _null(d: Positions, p: Positions, rng: np.random.Generator, gates: Gates
                                    np.where(d.buy_yes, d.p_yes, 1 - d.p_yes))
     dep = null.dependence(d.won, d.buy_yes, d.count, d.p_yes, d.lo, d.hi, d.cluster, d.day,
                           d.break_even, **terms)
+    if "flat" in gates.makers.split("+") and d.makes:
+        dep = replace(dep, flat=True)  # runs/method-revision/fourth-candidate.md
     widen = null.widening(dep, p.buy_yes, p.count, p.p_yes, p.lo, p.hi, p.cluster, p.day,
                           p.break_even, **_exact(p, gates))
     return dep, widen, null.simulate_totals(p.lo, p.hi, p.cluster, p.buy_yes, p.count,

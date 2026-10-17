@@ -47,12 +47,15 @@ from kalshibot.kalshi.models import PRICE_SCALE
 class Dependence:
     rho: float  # correlation of YES surprises of different clusters on one day, in [0, 1]
     cross: tuple[float, ...]  # c_h, the same for clusters h = 1, 2, … days apart
+    flat: bool = False  # weigh every c_h by 1 instead of Bartlett's 1 − h/(H+1)
+
+    def weight(self, h: int) -> float:
+        return 1.0 if self.flat else 1 - h / (len(self.cross) + 1)
 
     @property
     def cross_day(self) -> float:
-        """2 Σ_h (1 − h/(H+1)) c_h: the Bartlett-weighted sum `widening` applies."""
-        lags = len(self.cross)
-        return 2 * sum((1 - h / (lags + 1)) * c for h, c in enumerate(self.cross, start=1))
+        """2 Σ_h w_h c_h: the weighted sum `widening` applies (`weight`)."""
+        return 2 * sum(self.weight(h) * c for h, c in enumerate(self.cross, start=1))
 
 
 def inputs(quotes: pd.DataFrame, method: str) -> pd.DataFrame:
@@ -272,7 +275,7 @@ def widening(dep: Dependence, buy_yes: np.ndarray, count: np.ndarray, p_yes: np.
              lo: np.ndarray, hi: np.ndarray, cluster: np.ndarray, day: np.ndarray,
              break_even: np.ndarray, exact=None, order=None) -> float:
     """The factor (≥ 1) by which the null's variance must grow for these positions:
-    (ΣV + ρ·ΣW + 2 Σ_h (1 − h/(H+1)) c_h Σ_d A_d A_{d+h}) / ΣV0 over this sample's own
+    (ΣV + ρ·ΣW + 2 Σ_h w_h c_h Σ_d A_d A_{d+h}) / ΣV0 (`Dependence.weight`) over this sample's own
     days (`_days`), never below the break-even variance ΣV, even where YES and NO
     positions offset. `exact` and `order` go to `_clusters`."""
     days = _days(_clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact,
@@ -280,9 +283,9 @@ def widening(dep: Dependence, buy_yes: np.ndarray, count: np.ndarray, p_yes: np.
     null_var, boundary = days["V0"].sum(), days["V"].sum()
     if null_var <= 0:
         return 1.0
-    a, lags = _calendar(days["A"]), len(dep.cross)
+    a = _calendar(days["A"])
     with np.errstate(all="ignore"):  # as in `dependence`
-        cross = sum((1 - h / (lags + 1)) * c * float(a[:-h] @ a[h:])
+        cross = sum(dep.weight(h) * c * float(a[:-h] @ a[h:])
                     for h, c in enumerate(dep.cross, start=1) if h < len(a))
     total = boundary + dep.rho * days["W"].sum() + 2 * cross
     return float(max(1.0, max(boundary, total) / null_var))
