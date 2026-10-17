@@ -27,3 +27,9 @@ CHAIN3DONE
 exact+flat+jackknife-makers-0.25 rc=0 wall=6555s args=0.25 --only makers: --makers exact+flat+jackknife
 exact+flat+jackknife-power-makers-0.25 rc=0 wall=1014s args=power 0.25 --only makers: --makers exact+flat+jackknife
 CHAIN4DONE
+unchanged-taker-0.1 rc=0 wall=766s args=0.1 --only boundary
+unchanged-yes-0.1 rc=0 wall=242s args=0.1 --only 'YES family'
+unchanged-edge1-0.1 rc=0 wall=166s args=0.1 --only '1¢ lower NO asks on q < 0.15'
+unchanged-h1-0.1 rc=0 wall=615s args=0.1 --only 'H1-shaped: NO at YES ≤ 20¢ only, half spread 1¢'
+unchanged-power-taker-0.1 rc=0 wall=189s args=power 0.1 --only '1¢ lower asks'
+unchanged-power-h1-0.1 rc=0 wall=226s args=power 0.1 --only 'H1-shaped: 0.75'
