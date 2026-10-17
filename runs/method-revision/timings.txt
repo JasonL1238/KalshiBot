@@ -20,3 +20,4 @@ unchanged-power-taker-0.1 rc=0 wall=160s args=power 0.1 --only '1¢ lower asks'
 unchanged-power-h1-0.1 rc=0 wall=179s args=power 0.1 --only 'H1-shaped: 0.75'
 exact+centred-makers-0.25 rc=0 wall=3725s args=0.25 --only makers: --makers exact+centred
 exact+centred-power-makers-0.25 rc=0 wall=668s args=power 0.25 --only makers: --makers exact+centred
+CHAIN2DONE
