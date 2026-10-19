@@ -177,9 +177,9 @@ def _null(d: Positions, p: Positions, rng: np.random.Generator, gates: Gates
     """The dependence estimated on discovery positions `d`, the widening it implies for
     confirmation positions `p`, and `p`'s null totals (not yet widened). A sample with
     maker fills (runs/method-revision/fourth-candidate.md) gets their exact boundary
-    covariance (`_exact`), every cross-day correlation weighted alike
+    covariance (`_maker_args`), every cross-day correlation weighted alike
     (`null.Dependence.flat`), and a widening raised by its delete-a-block jackknife SE
-    over discovery days (`null.jackknife`, `gates.jackknife_blocks` of them)."""
+    over blocks of the dependence sample's days (`null.jackknife`, `gates.jackknife_blocks`)."""
     sample = (d.won, d.buy_yes, d.count, d.p_yes, d.lo, d.hi, d.cluster, d.day, d.break_even)
     scored = (p.buy_yes, p.count, p.p_yes, p.lo, p.hi, p.cluster, p.day, p.break_even)
     flat = {"flat": True} if d.makes else {}

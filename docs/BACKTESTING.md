@@ -47,7 +47,8 @@ except what M3 fixes per family before its own confirmation test (the last list 
      one draw per cluster, recentred to zero edge), widened to each position's
      break-even variance, to the same-day comovement of clusters, and to the persistence
      of shocks across days, both measured on every configuration's discovery positions
-     (below); and the stationary bootstrap of daily returns;
+     (below; for resting bids' fills, the Maker null); and the stationary bootstrap of
+     daily returns;
    - Holm across m = 12 places, one per hypothesis, at family-wise α = 0.05 (a place
      with no family run counts as p = 1), with the families confirmed forward split off
      at α/12 each ([ROADMAP](ROADMAP.md#research-calendar));
@@ -85,10 +86,8 @@ except what M3 fixes per family before its own confirmation test (the last list 
    `gauntlet.power` back for revision before any confirmation runs; a maker row in which
    the gauntlet does not hold its size, or a maker row in bold in the third table, holds
    the confirmation of every family of resting bids held to settlement until a revised
-   method passes the maker rows. Candidates, each going back through these rows: one
-   draw and one interval per contract for a maker's fills; each cluster's null variance
-   raised to the exact boundary covariance of its fills; a maker family's dependence
-   surprises centred at its break-evens. An H1-shaped row in which the gauntlet does not
+   method passes the maker rows (the Maker null, below, passes them: Conformance,
+   Makers). An H1-shaped row in which the gauntlet does not
    hold its size, or in bold in the third table, holds H1's confirmation until a revised
    method passes those rows: a logged change to H1's registered method, with the user's
    sign-off. H1's coupling R check (the pre-registration paragraph) holds it too, until it
@@ -125,6 +124,17 @@ power is simulated on round-trip profit, exit costs included.
   settle monotonically. Every other contract, such as two players' goal-scorer markets,
   has its own draw, and the widening measures how draws move together. A cluster
   counts on the day its last position settles.
+- **Maker null** (`gauntlet._null`, for a sample holding Tier 1's maker fills), in
+  place of the nested intervals' variance. A resting bid's fills on one contract all
+  settle on its outcome, so each such cluster's boundary variance is their exact
+  covariance: each fill covaries with every earlier one by its own variance, the larger
+  of its null and break-even ones (`null._shared_outcome_variance`). The cross-day
+  correlations count with equal weights, not Bartlett's, which understate a lasting
+  shock. The widening is then raised by its own delete-a-block jackknife standard error,
+  over 10 contiguous blocks of the dependence sample's days (`null.jackknife_se`), since
+  that estimate is noisy when shocks last. `gauntlet.power` simulates its worlds with
+  the point estimate and tests them against the raised null, as the real test is. The
+  candidates screened against it and why it was chosen: Conformance, Makers.
 - **Dependence sample:** every configuration's discovery positions decided in its last
   400 days (`Gates.dependence_days`), each bet once: contiguous, so clusters up to
   ⌈√D⌉ days apart pair up often (D: the days on which they settle), and nearest the
@@ -140,14 +150,16 @@ maximum holding period (which sets both embargoes and which markets count); the 
 rule's candle leg (the worse of the next 1-minute candle's extreme and the next print,
 or the print alone); the window-end bids that mark open positions (until they're wired
 in, zero); where needed, the path null; and, for a touch maker, its queue models and
-their calibration. A family of resting bids held to settlement checks its coupling
-(Conformance, Coupling R) against the maker rows, and H1, before its confirmation test,
-against the H1-shaped rows: its largest R̄ among its configurations, each on its own
+their calibration. H1, before its confirmation test, checks its coupling (Conformance,
+Coupling R) against the H1-shaped rows: its largest R̄ among its configurations, each on its own
 discovery positions and computed by the runner ([ROADMAP](ROADMAP.md#milestones) M3),
 must be at most some passing row's R; a family above every row's R needs a row at its R̄
 first. That is conservative where R̄ ≥ R (Coupling R, below), and a row's R is a mean
-over the configurations its worlds selected. A family of resting bids trades standalone
-contracts only, unless a bucket or ladder maker row passes first.
+over the configurations its worlds selected. A family of resting bids held to
+settlement needs no such check: on a standalone contract the Maker null's variance is
+at least the boundary's (R ≤ 1). It trades standalone contracts only, unless a bucket
+or ladder maker row passes first (`Positions.from_frame` refuses maker fills on several
+contracts of one cluster).
 
 ## Fill models
 
@@ -219,8 +231,9 @@ the reference, and every engine's own PnL is reconciled against it.
 > Being re-measured for M3's dependence sample (discovery's last 400 days) and its new
 > worlds (a shock from the seam on, the makers and the H1-shaped rows); until then the
 > two tables below are M2's, and the third (`python -m
-> kalshibot.research.validation.conformance power`) is pending. `--only makers:` (or
-> `--only H1-shaped`) runs those rows alone, seeded as in the full grid.
+> kalshibot.research.validation.conformance power`) is pending, except the maker rows
+> (Makers, below), measured under the Maker null. `--only makers:` (or `--only
+> H1-shaped`) runs those rows alone, seeded as in the full grid.
 
 `research/validation/conformance.py` runs the whole pipeline (selection, then the
 candidate tests) on synthetic worlds whose truth is known (`synthetic.py`). The family
@@ -250,11 +263,13 @@ is about ten), and the dependence sample is the runner's (above). The worlds:
   on every sweep through it, as Tier 1 fills. The sweeps (`synthetic.py`, "Resting
   bids") select adversely, yet leave every depth at zero net edge, the least favorable
   null. The null prices each fill at the mid before its sweep, one sweep a minute (the
-  least favorable timing: with staler candles, several fills would share one null
-  interval, nearer the one outcome they share in truth), and gives a contract's fills
-  nested intervals on one draw, while in truth each fill covaries with every earlier one
-  by its own break-even variance; Coupling R, below, measures the difference. The maker
-  edge rows (the third table) make the same fills a few cents cheaper;
+  least favorable timing for nested intervals: with staler candles, several fills would
+  share one null interval, nearer the one outcome they share in truth). The
+  nested-interval null gives a contract's fills nested intervals on one draw, while in
+  truth each fill covaries with every earlier one by its own break-even variance
+  (Coupling R, below); the Maker null takes that covariance exactly. The maker edge rows
+  (the third table) make the same fills a few cents cheaper. The grid's last three rows
+  are maker worlds held out from choosing the Maker null, seeded before it was chosen;
 - **H1-shaped:** the taker family deciding again at each of 15 snapshots of a contract's
   day, as H1 decides once a day for up to 15 days, so it buys a contract again whenever
   its ask is still past the cutoff. Each truth is a posterior on noisy signals of the
@@ -277,7 +292,8 @@ Coupling R, for one configuration's positions: the sum over the null's clusters 
 variance at the boundary (each position winning with its break-even, given the earlier
 ones) of a cluster's summed net PnL, over the sum of the null's variance of the same
 (`null._clusters`' var_b: the positions' intervals on the cluster's draw, nested or
-sliding, scaled up to the break-even variances). In the first, positions a before b,
+sliding, scaled up to the break-even variances; the printed R and R̄ use it for the maker
+rows too, the coupling the Maker null takes exactly). In the first, positions a before b,
 each signed by its side and count, covary by B_b(1 − B_b) on one contract, B the
 break-even, and on two contracts by the overlap of their intervals at b's time less
 P·P′, their probabilities then (for two buckets of an event, −P·P′). R takes those from
@@ -355,6 +371,52 @@ tables (about 2 hours on 14 cores, Python 3.13; each world's seed is fixed) at t
 that adds this section. It uses 2,000 draws per test (`conformance.GATES`); the
 pre-registered gauntlet uses 20,000 (`gauntlet.PREREGISTERED`). The p-value is valid at
 any count, and fewer draws only lose power.
+
+### Makers (2026-10)
+
+Under the nested-interval null (4baee4e), the gauntlet's size in the fourth row below
+was 6.3 / 0.9, over its limits, and the 1–5¢ power row was in bold where the cross-day
+estimate is negative (80.0 / 73.2). Five candidates were screened at 0.25 scale on the
+six maker rows and the two maker power rows: one draw and one interval per contract;
+the exact covariance; dependence surprises centred at the break-evens; those two
+together; and the exact covariance with flat cross-day weights. Each failed the fourth
+row. A diagnosis on 400 of its worlds found the cross-day estimate biased low by
+Bartlett's weights (about a quarter at φ = 0.8 over 20 lags), and then, with flat
+weights, noisy: the widening estimated from 400 days had a standard deviation of 38% of
+an oracle's from 4,000. The Maker null adds the jackknife margin for that noise, and is
+the one candidate that held every maker row. The three held-out rows were added and
+seeded before it was chosen. The screens, the diagnosis (written down before each step
+ran) and these runs' outputs: `runs/method-revision/`. Reproduce with
+`OMP_NUM_THREADS=1 python -m kalshibot.research.validation.conformance --only makers:`,
+then `--only "makers (held out)"` and `power --only makers:` (about 11 hours on 4
+cores, Python 3.13), at the commit that adds this section.
+
+| Maker world | n | ρ̂ | cross-day | widening | widened null | gauntlet |
+|---|---|---|---|---|---|---|
+| makers: NO bids 5–25¢ below the truth, 16 sweeps a contract | 2000 | 0.002 | -0.01 | 1.45 | 2.9 / 0.1 | 2.9 / 0.1 |
+| makers: NO bids 5–25¢ below the truth, shock ρ = 0.5 lasting days (φ = 0.8) | 2000 | 0.124 | 0.87 | 11.45 | 2.1 / 0.1 | 2.0 / 0.1 |
+| makers: NO bids 1–5¢ below the truth, 64 sweeps a contract and news | 2000 | 0.002 | -0.01 | 1.61 | 3.4 / 0.2 | 3.4 / 0.2 |
+| makers: NO bids 1–5¢ below the truth, 64 sweeps and news, shock ρ = 0.5 lasting days (φ = 0.8) | 2000 | 0.118 | 0.84 | 18.76 | 4.2 / 0.3 | 4.1 / 0.3 |
+| makers: NO bids 1¢ below the truth only, 64 sweeps a contract and news | 2000 | 0.002 | -0.01 | 1.74 | 4.0 / 0.1 | 3.7 / 0.1 |
+| makers: NO bids 5¢ below the truth only, 16 sweeps a contract | 2000 | 0.002 | -0.01 | 1.64 | 3.7 / 0.2 | 3.4 / 0.2 |
+| makers (held out): NO bids 1–5¢ below the truth, 64 sweeps and news, shock ρ = 0.5 lasting days (φ = 0.5) | 2000 | 0.120 | 0.19 | 7.37 | 3.3 / 0.4 | 3.1 / 0.4 |
+| makers (held out): NO bids 1–5¢ below the truth, 64 sweeps and news, shock ρ = 0.3 lasting days (φ = 0.8) | 2000 | 0.071 | 0.50 | 11.93 | 3.6 / 0.4 | 3.6 / 0.4 |
+| makers (held out): NO bids 5–25¢ below the truth, 16 sweeps and news, shock ρ = 0.5 lasting days (φ = 0.8) | 2000 | 0.104 | 0.74 | 10.58 | 2.1 / 0.2 | 2.0 / 0.2 |
+
+Every maker row holds its size at both levels (limits 5.97% / 0.705% at n = 2000), the
+held-out ones too. The other procedures' columns are in
+`runs/method-revision/final-makers-1.0.md` and `final-held-out-1.0.md`. The maker power
+rows, as the third table:
+
+| Edge world | true net edge per position | widening | power predicted / gauntlet's | the same where the cross-day estimate is negative (worlds) |
+|---|---|---|---|---|
+| makers: fills 4¢ cheaper, NO bids 5–25¢ below the truth | +3.96¢ | 1.65 | 43.3 / 39.0 | 50.4 / 45.4 (194) |
+| makers: fills 3.5¢ cheaper, NO bids 1–5¢ below the truth, 64 sweeps and news | +3.45¢ | 1.82 | 54.8 / 56.3 | 63.6 / 68.6 (191) |
+
+Neither is in bold. Measured power is 14–17 points below the nested-interval null's
+(56.0 and 70.7 at α/12), which didn't hold its size. The jackknife margin alone costs
+about 4–5 points against the same null without it (at 0.25 scale), since it raises the
+widening by 10–15% even in maker worlds without a lasting shock.
 
 ## Positive control
 

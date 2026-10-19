@@ -47,6 +47,7 @@ to the main checkout's absolute `data/` path.
 | [src/kalshibot/research/](src/kalshibot/research/AGENTS.md) | **Section 1:** research calendar, point-in-time loader, the research runner, backtests, validation |
 | [benchmarks/](benchmarks/AGENTS.md) | Execution performance evidence |
 | `tests/` | pytest; `test_repo_hygiene.py` checks attribution, the doc tree, ignores, declared dependencies, append-only ledgers, and layering |
+| `runs/` | Committed outputs of long runs behind docs/ results (conformance reruns, method revisions); one subdirectory or file set per run, never edited after commit |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Plan of record and research calendar |
 | [docs/RESEARCH.md](docs/RESEARCH.md) | Venue and API facts, reference repos |
 | [docs/STRATEGIES.md](docs/STRATEGIES.md) | Hypotheses and verdicts |
