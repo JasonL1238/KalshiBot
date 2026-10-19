@@ -133,7 +133,7 @@ class Pattern:
         return f"Poisson {self.rate:g}/s{bursts}"
 
 
-# The feed's schedules: the same mean rate, steady or with 40% of frames in bursts.
+# The feed's schedules: the same mean rate, steady or with half the frames in bursts.
 PATTERNS = {"steady": Pattern(2000), "bursty": Pattern(1000, burst_every=0.2, burst_size=200)}
 
 
@@ -165,16 +165,23 @@ def quantiles(ns: Sequence[int]) -> dict[str, float]:
 
 def table_head(first: str, width: int = 34) -> str:
     return f"{first:<{width}}{'n':>8}" + "".join(
-        f"{k:>11}" for k in ("p50 µs", "p99", "p99.9", "max"))
+        f"{k:>11}" for k in ("mean µs", "p50", "p99", "p99.9", "max"))
 
 
 def row(name: str, ns: Sequence[int], width: int = 34) -> str:
     """A table row. A percentile needs 10 samples beyond it, else it prints as —."""
     qs, n = quantiles(ns), len(ns)
-    shown = [qs["p50"], qs["p99"] if n >= 1000 else math.nan,
-             qs["p99.9"] if n >= 10_000 else math.nan, qs["max"]]
+    shown = [statistics.fmean(ns) / 1000 if n else math.nan, qs["p50"],
+             qs["p99"] if n >= 1000 else math.nan, qs["p99.9"] if n >= 10_000 else math.nan,
+             qs["max"]]
     return f"{name:<{width}}{n:>8,}" + "".join(
         f"{'—':>11}" if math.isnan(v) else f"{v:>11.1f}" for v in shown)
+
+
+def burst_ends(offsets: Sequence[int]) -> list[int]:
+    """The index of each burst's last item: a burst drains by the time it is done."""
+    return [i for i in range(1, len(offsets)) if offsets[i] == offsets[i - 1]
+            and (i + 1 == len(offsets) or offsets[i + 1] != offsets[i])]
 
 
 def default_rounds(candidates: int) -> int:

@@ -178,9 +178,10 @@ class StackRuns:
         return out
 
 
-def run(n: int, pattern: harness.Pattern, rounds: int) -> tuple[dict[str, StackRuns], array]:
+def run(n: int, pattern: harness.Pattern, rounds: int
+        ) -> tuple[dict[str, StackRuns], array, list[int]]:
     """Each stack consumes `rounds` replays of one stream (interleaved). Returns each
-    stack's runs, and the sender's lag."""
+    stack's runs, the sender's lag, and the replay's burst ends."""
     signer = KalshiSigner("bench", ed25519.Ed25519PrivateKey.generate())
     stream = harness.Stream(n // rounds)
     offsets = harness.arrivals(n // rounds, pattern)
@@ -198,8 +199,8 @@ def run(n: int, pattern: harness.Pattern, rounds: int) -> tuple[dict[str, StackR
 
         result = harness.replay({name: candidate(name) for name in STACKS}, stream.frames,
                                 offsets, rounds)
-    return {name: StackRuns(r, result.lat[name], result.cpu[name])
-            for name, r in runs.items()}, result.lag
+    return ({name: StackRuns(r, result.lat[name], result.cpu[name])
+             for name, r in runs.items()}, result.lag, harness.burst_ends(offsets))
 
 
 def check_agreement(results: dict[str, StackRuns]) -> int:
@@ -217,7 +218,7 @@ def main(n: int = 40_000, speed: float = 1.0, rounds: int | None = None) -> None
     for label, pattern in harness.PATTERNS.items():
         pattern = pattern.faster(speed)
         with harness.Steal() as steal:
-            results, lag = run(n, pattern, rounds)
+            results, lag, ends = run(n, pattern, rounds)
         decisions = check_agreement(results)
         print(f"open-loop replay, {label} ({pattern}), {rounds} × {n // rounds:,} frames "
               f"per stack, {decisions} orders per replay, host CPU steal {steal}")
@@ -226,6 +227,10 @@ def main(n: int = 40_000, speed: float = 1.0, rounds: int | None = None) -> None
         for name, r in results.items():
             print(name)
             print(harness.row("  frame → processed", r.frames) + f"{r.cpu:>14.1f}")
+            if ends:
+                per = len(r.frames) // rounds
+                print(harness.row("  burst → its last frame processed",
+                                  [r.frames[k * per + i] for k in range(rounds) for i in ends]))
             print(harness.row("  frame → signed order", r.pooled("to_order")))
             print(harness.row("  frame → ack (loopback TLS)", r.pooled("to_ack")))
             print(harness.row("  stage: decode", r.pooled("decode")))
