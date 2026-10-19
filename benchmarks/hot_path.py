@@ -8,7 +8,8 @@ snapshot at one instant, as after a resubscribe, amid steady traffic). Each stac
 consumes the feed, keeps every book, and runs one decision rule: buy YES (an IOC limit
 at the ask) when a market's best ask first falls a tick below where its first snapshot
 put it. Each order is signed (Ed25519, `KalshiSigner`), serialized, and POSTed, without
-blocking the feed, to a local TLS server (`harness.OrderServer`) that acknowledges it. Stacks:
+blocking the feed, to a local TLS server (`harness.OrderServer`) that acknowledges it.
+Stacks:
 - incumbent: what the repo uses today. asyncio, websockets read through
   `kalshi.ws.Connection`, stdlib json, `kalshi.ws.BookFeed`, httpx (HTTP/1.1);
 - P1: uvloop, picows, msgspec typed structs into `decode.StructFeed` (the same

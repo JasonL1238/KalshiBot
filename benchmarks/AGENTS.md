@@ -14,7 +14,7 @@ Run: `python benchmarks/<script>.py`.
 |------|-------------------|
 | `book.py` | Order-book side structure: `kalshi.models.BookSide` (dict + price bitmap) |
 | `harness.py` | Shared: schedules, open-loop timing, synthetic frames, replay sender, local order server |
-| `decode.py` | JSON decoder for WebSocket frames (stdlib json, orjson, msgspec); `decode.Message` structs, and `StructFeed`, P1's prototype of `kalshi.ws.BookFeed` for them, kept equal to it by the decoder-agreement test (M5 keeps one feed, in kalshi/ws.py) |
+| `decode.py` | JSON decoder for WebSocket frames (stdlib json, orjson, msgspec); `decode.Message` structs and `StructFeed` (P1's typed `BookFeed`, kept equal by the agreement test) |
 | `sign.py` | Trading key type: Ed25519 vs RSA-2048 PSS |
 | `ws_clients.py` | Event loop and WebSocket client: websockets vs aiohttp vs picows vs a bare reader (the loop alone), each on asyncio and uvloop |
 | `http_clients.py` | Order HTTP client: httpx HTTP/1.1 and HTTP/2 vs aiohttp |

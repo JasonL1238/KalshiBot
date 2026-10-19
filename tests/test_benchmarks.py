@@ -14,6 +14,8 @@ import tomllib
 from pathlib import Path
 
 import pytest
+
+# private, but the only handle on the stderr fd pytest keeps out of capture for faulthandler
 from _pytest.faulthandler import fault_handler_stderr_fd_key
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from packaging.requirements import Requirement
@@ -79,12 +81,12 @@ def test_open_loop_charges_queueing_to_the_items_behind():
 def test_replay_charges_a_stall_to_every_frame_queued_behind_it():
     """Over a real replay, frames 1 ms apart: the consumer stalls 20 ms on frame 10, so
     frame k (due at k ms, handled no earlier than 30 ms) is charged at least 30 - k ms."""
+    options = bench("ws_clients").WEBSOCKETS_OPTIONS
     frames = harness.Stream(40, markets=10).frames
     offsets = [k * 1_000_000 for k in range(40)]
 
     async def stalling(url: str, sink: harness.Recorder) -> None:
-        async with connect(url, max_size=None, compression=None, ping_interval=None,
-                           proxy=None) as ws:
+        async with connect(url, **options) as ws:
             async for frame in ws:
                 if sink.t0 and sink.i == 10:
                     time.sleep(0.020)
@@ -101,7 +103,7 @@ def test_replay_charges_a_stall_to_every_frame_queued_behind_it():
 def test_p1_charges_each_frame_its_processing_and_its_queue():
     """Every frame due at once, each decode taking at least 1 ms: frame i is done no
     earlier than (i + 1) ms after it was due, and never before its own stages are."""
-    hot_path, msgspec = bench("hot_path"), importlib.import_module("msgspec")
+    hot_path = bench("hot_path")
     frames = harness.Stream(100, markets=10).frames
 
     def slow_decode(frame: bytes):
@@ -118,7 +120,8 @@ def test_p1_charges_each_frame_its_processing_and_its_queue():
         sink, timings = harness.Recorder([0] * len(frames)), hot_path.Timings.for_frames(
             len(frames))
         stack = hot_path.Stack(slow_decode, hot_path.decode.StructFeed(),
-                               hot_path.Rule(signer, msgspec.json.encode), timings, sink, post)
+                               hot_path.Rule(signer, hot_path.msgspec.json.encode), timings,
+                               sink, post)
         stack.on_frame(str(harness.clock()).encode())  # t0: every frame is due now
         for frame in frames:
             stack.on_frame(frame)
