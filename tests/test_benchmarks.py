@@ -21,15 +21,17 @@ import harness  # noqa: E402
 
 from kalshibot.kalshi.ws import BookFeed  # noqa: E402
 
+# The [bench] extra's packages; each imports under its distribution's name.
+BENCH = {Requirement(r).name for r in tomllib.loads((ROOT / "pyproject.toml").read_text())[
+    "project"]["optional-dependencies"]["bench"]}
+
 
 def bench(name: str):
     """A benchmark script, or a skip when it needs a missing [bench] package."""
-    extra = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"][
-        "optional-dependencies"]["bench"]
     try:
         return importlib.import_module(name)
     except ModuleNotFoundError as e:
-        if e.name.split(".")[0] not in {Requirement(r).name for r in extra}:
+        if e.name.split(".")[0] not in BENCH:
             raise
         pytest.skip(f"{name} needs {e.name} (the [bench] extra)")
 

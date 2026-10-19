@@ -215,7 +215,7 @@ def test_imported_names_resolves_nested_and_relative_imports():
         source, "kalshibot.execution")
 
 
-def requirements(*extras: str, core: bool = True) -> dict:
+def requirements(*extras: str) -> dict:
     """Canonical name -> Requirement for pyproject's dependencies and the given extras."""
     import tomllib
 
@@ -223,7 +223,7 @@ def requirements(*extras: str, core: bool = True) -> dict:
     from packaging.utils import canonicalize_name
 
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
-    lines = (project["dependencies"] if core else []) + [
+    lines = project["dependencies"] + [
         r for e in extras for r in project["optional-dependencies"][e]]
     return {canonicalize_name(r.name): r for r in map(Requirement, lines)}
 
