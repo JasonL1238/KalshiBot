@@ -37,9 +37,7 @@ bench = [
     "msgspec>=0.19",
     "orjson>=3.10",
     "picows>=2",
-    # httpcore retries a failed `import sniffio` on every async request when it's missing,
-    # which costs ~0.2 ms per request.
-    "sniffio>=1.3",
+    "sniffio>=1.3",  # httpcore re-imports it per async request when missing: EXECUTION.md
     "uvloop>=0.21",
 ]
 

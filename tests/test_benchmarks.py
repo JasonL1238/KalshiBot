@@ -116,7 +116,8 @@ SMALL = {  # script -> main() arguments for a run of a few seconds
 def test_script_runs_end_to_end(script, capsys, monkeypatch):
     module = bench(script)
     monkeypatch.setattr(harness, "VERIFY", True)  # replays check each frame's payload
-    faulthandler.dump_traceback_later(300, exit=True)  # a hung replay fails, with stacks
+    # a hung replay fails, with stacks (pytest captures sys.stderr, which has no fileno)
+    faulthandler.dump_traceback_later(300, exit=True, file=sys.__stderr__)
     try:
         module.main(**SMALL[script])
     finally:
