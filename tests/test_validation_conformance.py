@@ -316,3 +316,12 @@ def test_size_at_the_h1_shaped_boundary():
 def test_power_against_a_large_edge():
     results = conformance.simulate(100, seed=102, edge=synthetic.Edge(0.0, 0.15, 3.0))
     assert conformance.rates(results, conformance.GATES.level)["gauntlet"] >= 0.85
+
+
+def test_calibration_counts_the_bernoulli_error_when_no_world_rejects():
+    """No rejection in 300 worlds against a 0.7% prediction is no evidence of bias: the
+    sample error collapses, the Bernoulli one doesn't."""
+    results = [{"power_predicted": 0.007 + 0.0001 * (i % 3), "p_value": 1.0} for i in range(300)]
+    assert conformance._calibration(results).endswith("‡")
+    biased = [{"power_predicted": 0.85, "p_value": 0.0 if i < 220 else 1.0} for i in range(300)]
+    assert conformance._calibration(biased).startswith("**")

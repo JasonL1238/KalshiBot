@@ -36,6 +36,12 @@ class Gates:
     power_worlds: int = 1_000  # simulated confirmations behind a power estimate
     power_resamples: int = 2_000  # bootstrap draws in each
     jackknife_blocks: int = 10  # a maker sample's widening SE (`_null`)
+    # how the null couples a taker's repeated decisions on one contract (`_repeated`)
+    repeated: str = "nested"
+
+    def __post_init__(self):
+        if self.repeated not in REPEATED_METHODS:
+            raise ValueError(f"repeated must be one of {REPEATED_METHODS}: {self.repeated!r}")
 
     @property
     def level(self) -> float:
@@ -43,6 +49,8 @@ class Gates:
         return self.alpha / self.families
 
 
+# runs/h1-revision/candidates.md: the nested intervals, then candidates D and C
+REPEATED_METHODS = ("nested", "h1-D", "h1-C")
 PREREGISTERED = Gates()
 
 
@@ -63,6 +71,8 @@ class Positions:
     day: np.ndarray  # settlement day: integer UTC days, as settle.close_day
     maker: np.ndarray | None = None  # True: a resting bid's fill (`_null`); None: no maker fills
     order: np.ndarray | None = None  # when each is priced, for ordering fills; None: as given
+    contract: np.ndarray | None = None  # integer contract codes (from ticker); None: unknown
+    exclusive: np.ndarray | None = None  # its cluster is an exclusive event's; None: unknown
 
     @classmethod
     def from_frame(cls, df: pd.DataFrame) -> Positions:
@@ -87,7 +97,10 @@ class Positions:
                    cluster=df["cluster"].to_numpy(), day=df["day"].to_numpy(),
                    maker=df["maker"].to_numpy(bool) if "maker" in df else None,
                    order=(pd.to_datetime(df["priced_at"]).astype("int64").to_numpy()
-                          if "priced_at" in df else None))
+                          if "priced_at" in df else None),
+                   contract=(pd.factorize(df["ticker"])[0] if "ticker" in df else None),
+                   exclusive=(df["mutually_exclusive"].to_numpy(bool)
+                              if "mutually_exclusive" in df else None))
 
     @property
     def makes(self) -> bool:
@@ -188,13 +201,30 @@ def _null(d: Positions, p: Positions, rng: np.random.Generator, gates: Gates
     sample = (d.won, d.buy_yes, d.count, d.p_yes, d.lo, d.hi, d.cluster, d.day, d.break_even)
     scored = (p.buy_yes, p.count, p.p_yes, p.lo, p.hi, p.cluster, p.day, p.break_even)
     flat = {"flat": True} if d.makes else {}
-    dep = null.dependence(*sample, **_maker_args(d), **flat)
-    widen = null.widening(dep, *scored, **_maker_args(p))
+    dep = null.dependence(*sample, **_maker_args(d), **flat, **_repeated(d, gates))
+    widen = null.widening(dep, *scored, **_maker_args(p), **_repeated(p, gates))
     if d.makes:
         replicates = null.jackknife(*sample, gates.jackknife_blocks, **_maker_args(d), **flat)
         widen += null.jackknife_se(replicates, *scored, **_maker_args(p))
     return dep, widen, null.simulate_totals(p.lo, p.hi, p.cluster, p.buy_yes, p.count,
                                             p.p_yes, gates.draws, rng)
+
+
+def _repeated(p: Positions, gates: Gates) -> dict:
+    """`null._clusters`' repeated for `p` under `gates.repeated`: the clusters where a
+    taker buys one contract at more than one time (H1's decisions), or none."""
+    if gates.repeated == "nested" or p.contract is None or p.order is None:
+        return {}
+    taker = np.ones(len(p.day), bool) if p.maker is None else ~p.maker
+    key = pd.DataFrame({"cluster": p.cluster, "contract": p.contract, "order": p.order})[taker]
+    times = key.groupby(["cluster", "contract"])["order"].nunique()
+    hit = times[times > 1].index.get_level_values("cluster").unique()
+    rows = taker & np.isin(p.cluster, hit)
+    if not rows.any():
+        return {}
+    exclusive = np.zeros(len(p.day), bool) if p.exclusive is None else p.exclusive
+    return {"repeated": null.Repeated(rows, p.contract, p.order, exclusive,
+                                      "zero" if gates.repeated == "h1-D" else "prices")}
 
 
 def _maker_args(p: Positions) -> dict:
@@ -239,7 +269,8 @@ def power(discovery_positions: Positions, positions: Positions, days: np.ndarray
     null_net = totals * np.sqrt(widen)
     win, lo, hi = _alternative(p, edge)
     scale = np.sqrt(max(null.widening(dependence, p.buy_yes, p.count, hi - lo, lo, hi,
-                                      p.cluster, p.day, win, **_maker_args(p))
+                                      p.cluster, p.day, win, **_maker_args(p),
+                                      **_repeated(p, gates))
                         for dependence in (dep, null.Dependence(dep.rho, ()))))
     stake = p.count * float(PRICE_SCALE)
     day = np.searchsorted(days, p.day)

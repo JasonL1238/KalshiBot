@@ -353,8 +353,8 @@ def _null_positions(positions: pd.DataFrame, q: pd.DataFrame, day: str = "close_
     whole = quoted.groupby([q["event"], q["priced_at"]]).transform("all")
     priced = null.inputs(q[np.where(q["mutually_exclusive"], whole, quoted)],
                          gauntlet.PREREGISTERED.devig)
-    rows = positions.merge(priced[["ticker", "priced_at", "p_yes", "lo", "hi", "cluster"]],
-                           on=["ticker", "priced_at"])
+    rows = positions.merge(priced[["ticker", "priced_at", "p_yes", "lo", "hi", "cluster",
+                                   "mutually_exclusive"]], on=["ticker", "priced_at"])
     rows = rows.assign(paid=rows["cost"] + rows["entry_fee"],
                        won=rows["payoff"] / (rows["fill_count"] * PRICE_SCALE),
                        day=(settle.close_day(rows[day]) - _EPOCH).dt.days.astype("int64"))

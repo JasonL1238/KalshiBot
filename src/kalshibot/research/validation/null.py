@@ -169,7 +169,7 @@ def p_value(observed_net: float | np.ndarray, null_net: np.ndarray) -> float | n
 
 
 def _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact=None,
-              order=None) -> pd.DataFrame:
+              order=None, repeated=None) -> pd.DataFrame:
     """Per cluster: its day (when its last position settles), the null variance of its
     summed won × count (exact, from the shared uniform draw), that variance at the
     break-even boundary (scaled by the positions' larger variances), and its direction:
@@ -177,7 +177,9 @@ def _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact=Non
     cluster, its boundary variance is instead the exact one of positions that all settle
     on one outcome, each covarying with every earlier one (by `order`, default as given)
     by its own boundary variance v, the larger of its null and break-even variances:
-    Σ_b v_b·s_b·(s_b + 2 Σ_{a before b} s_a), s the signed counts (`_shared_outcome_variance`)."""
+    Σ_b v_b·s_b·(s_b + 2 Σ_{a before b} s_a), s the signed counts (`_shared_outcome_variance`).
+    `repeated` (`Repeated`) marks clusters holding a taker's repeated decisions on one
+    contract, whose variance it revises (`_repeated_variance`)."""
     sign = np.where(buy_yes, 1.0, -1.0) * count  # won × count = constant + sign × YES
     win = np.where(buy_yes, p_yes, 1 - p_yes)
     df = pd.DataFrame({"cluster": cluster, "day": day, "lo": lo, "hi": hi, "sign": sign,
@@ -203,8 +205,56 @@ def _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact=Non
         order = np.arange(len(df)) if order is None else np.asarray(order)
         var = _shared_outcome_variance(df[rows], order[rows])
         out.loc[var.index, "var_b"] = var.clip(lower=0)
+    if repeated is not None and repeated.rows.any():
+        ratio_of = df["cluster"].map(ratio).to_numpy()
+        var = _repeated_variance(df, repeated, ratio_of, np.asarray(break_even, float))
+        out.loc[var.index, "var_b"] = var
     out["direction"] = np.where(out["sign"] >= 0, 1.0, -1.0)
     return out
+
+
+@dataclass(frozen=True)
+class Repeated:
+    """A taker's repeated decisions (H1's), for `_clusters`: `rows` marks the positions of
+    clusters where one contract is bought at more than one time; `contract` and `order`
+    give each position's contract and when it is priced; `exclusive`, whether its
+    cluster is an exclusive event's; `cross`, how two contracts of an exclusive event
+    covary ("zero" or "prices")."""
+
+    rows: np.ndarray
+    contract: np.ndarray
+    order: np.ndarray
+    exclusive: np.ndarray
+    cross: str = "zero"
+
+
+def _repeated_variance(df: pd.DataFrame, rep: Repeated, ratio: np.ndarray,
+                       break_even: np.ndarray) -> pd.Series:
+    """Per cluster `rep` marks, the boundary variance of its summed won × count with the
+    null's covariances revised: two positions on one contract, a before b, share one
+    outcome and covary by B_b(1 − B_b), the later one's break-even variance (Coupling R's
+    term); two contracts of an exclusive event covary by 0 (cross="zero": the truth's
+    −P·P′ is at most 0) or by −p·p′ at each one's own price (cross="prices"); a ladder's
+    keep the null's nested terms, and each position's own variance the null's, all
+    scaled to the boundary as `_clusters` scales them."""
+    out = {}
+    rows = np.flatnonzero(rep.rows)
+    for k, idx in pd.Series(rows).groupby(df["cluster"].to_numpy()[rows]).indices.items():
+        i = rows[idx]
+        a, b, w = df["lo"].to_numpy()[i], df["hi"].to_numpy()[i], df["sign"].to_numpy()[i]
+        overlap = np.clip(np.minimum.outer(b, b) - np.maximum.outer(a, a), 0, None)
+        cov = (overlap - np.outer(b - a, b - a)) * ratio[i][0]
+        same = rep.contract[i][:, None] == rep.contract[i]
+        later = np.where(rep.order[i][:, None] >= rep.order[i], np.arange(len(i))[:, None],
+                         np.arange(len(i)))
+        be = break_even[i][later]
+        cov = np.where(same & ~np.eye(len(i), dtype=bool), be * (1 - be), cov)
+        if rep.exclusive[i][0]:
+            cross = 0.0 if rep.cross == "zero" else -np.outer(b - a, b - a) * ratio[i][0]
+            cov = np.where(~same, cross, cov)
+        with np.errstate(all="ignore"):  # as above
+            out[k] = max(float(w @ cov @ w), 0.0)
+    return pd.Series(out)
 
 
 def _shared_outcome_variance(df: pd.DataFrame, order: np.ndarray) -> pd.Series:
@@ -237,8 +287,8 @@ def _calendar(series: pd.Series) -> np.ndarray:
 
 def dependence(won: np.ndarray, buy_yes: np.ndarray, count: np.ndarray, p_yes: np.ndarray,
                lo: np.ndarray, hi: np.ndarray, cluster: np.ndarray, day: np.ndarray,
-               break_even: np.ndarray, exact=None, order=None, flat: bool = False
-               ) -> Dependence:
+               break_even: np.ndarray, exact=None, order=None, flat: bool = False,
+               repeated=None) -> Dependence:
     """Estimate the YES-direction correlations from realized outcomes, by the method of
     moments. Each cluster's surprise x, the sum of (won − P_null(won)) × count over its
     positions less k times its variance (k = Σx / Σv removes any edge in proportion), is
@@ -247,10 +297,10 @@ def dependence(won: np.ndarray, buy_yes: np.ndarray, count: np.ndarray, p_yes: n
     D days on which clusters settle) c_h = Σ_d Y_d Y_{d+h} / Σ_d S_d S_{d+h}, with Y_d and
     S_d a day's sums of y and s (zero on days without clusters); all clipped to [−1, 1]
     (ρ to [0, 1]). Estimate on positions the test doesn't score, over long stretches of
-    discovery, and broadly (every configuration's). `exact` and `order` go to
+    discovery, and broadly (every configuration's). `exact`, `order` and `repeated` go to
     `_clusters`; `flat` to the result (`Dependence.weight`)."""
     return _moments(*_surprises(won, buy_yes, count, p_yes, lo, hi, cluster, day,
-                                break_even, exact, order), flat)
+                                break_even, exact, order, repeated), flat)
 
 
 def jackknife(won, buy_yes, count, p_yes, lo, hi, cluster, day, break_even, blocks: int,
@@ -276,11 +326,11 @@ def jackknife_se(replicates: list[Dependence], buy_yes, count, p_yes, lo, hi, cl
     return float(np.sqrt(len(w) - 1) * w.std()) if len(w) > 1 else 0.0
 
 
-def _surprises(won, buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact, order
-               ) -> tuple[pd.DataFrame, pd.Series]:
+def _surprises(won, buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact, order,
+               repeated=None) -> tuple[pd.DataFrame, pd.Series]:
     """`_clusters`' output and each cluster's summed surprise (won − P_null(won)) × count."""
     clusters = _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact,
-                         order)
+                         order, repeated)
     surprise = (np.asarray(won, dtype=float) - np.where(buy_yes, p_yes, 1 - p_yes)) * count
     x = pd.Series(surprise).groupby(np.asarray(cluster)).sum().reindex(clusters.index)
     return clusters, x
@@ -308,13 +358,13 @@ def _moments(clusters: pd.DataFrame, x: pd.Series, flat: bool = False) -> Depend
 
 def widening(dep: Dependence, buy_yes: np.ndarray, count: np.ndarray, p_yes: np.ndarray,
              lo: np.ndarray, hi: np.ndarray, cluster: np.ndarray, day: np.ndarray,
-             break_even: np.ndarray, exact=None, order=None) -> float:
+             break_even: np.ndarray, exact=None, order=None, repeated=None) -> float:
     """The factor (≥ 1) by which the null's variance must grow for these positions:
     (ΣV + ρ·ΣW + 2 Σ_h w_h c_h Σ_d A_d A_{d+h}) / ΣV0 (w_h: `Dependence.weight`) over
     this sample's own days (`_days`), never below the break-even variance ΣV, even where
     YES and NO positions offset. `exact` and `order` go to `_clusters`."""
     return _factor(dep, _days(_clusters(buy_yes, count, p_yes, lo, hi, cluster, day,
-                                        break_even, exact, order)))
+                                        break_even, exact, order, repeated)))
 
 
 def _factor(dep: Dependence, days: pd.DataFrame) -> float:

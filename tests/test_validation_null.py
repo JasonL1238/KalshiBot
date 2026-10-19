@@ -327,3 +327,22 @@ def test_jackknife_drops_each_run_of_days_once():
 def test_jackknife_skips_runs_of_days_without_a_cluster():
     one = surprises(4, 10, 0.3, RNG)  # 4 days of clusters, 10 runs asked for
     assert len(null.jackknife(**one, blocks=10)) == 4
+
+
+def test_repeated_decisions_share_their_contracts_outcome_by_hand():
+    """Two NO buys of one bucket at two times and one of another bucket of the event: the
+    same contract's pair covaries by the later buy's break-even variance, the two buckets
+    by 0 ("zero") or −p·p′ ("prices"); each position's own variance stays the null's."""
+    args = {"buy_yes": np.zeros(3, bool), "count": np.ones(3),
+            "p_yes": np.array([0.1, 0.2, 0.3]), "lo": np.array([0.0, 0.0, 0.5]),
+            "hi": np.array([0.1, 0.2, 0.8]), "cluster": np.zeros(3, int),
+            "day": np.zeros(3, int), "break_even": np.array([0.9, 0.8, 0.7])}
+    nested = null._clusters(**args)
+    ratio = (nested["boundary"] / nested["own"]).iloc[0]
+    p = args["hi"] - args["lo"]
+    own = (p * (1 - p)).sum() * ratio
+    for cross, term in (("zero", 0.0), ("prices", -(0.1 + 0.2) * 0.3 * ratio)):
+        rep = null.Repeated(np.ones(3, bool), np.array([0, 0, 1]), np.array([1, 2, 1]),
+                            np.ones(3, bool), cross)
+        by_hand = own + 2 * 0.8 * 0.2 + 2 * term  # the second buy (B = 0.8) is the later
+        assert null._clusters(**args, repeated=rep)["var_b"].iloc[0] == pytest.approx(by_hand)

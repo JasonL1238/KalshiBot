@@ -37,7 +37,8 @@ and prints the two tables in docs/BACKTESTING.md, then R and R̄ (`_coupling`) o
 whose positions repeat; append rows only, since each row is seeded by its position.
 `... conformance power` checks `gauntlet.power`, the estimate behind an Inconclusive
 verdict, against the gauntlet's measured power (`PREDICTION_GRID`).
-`--only <prefix>` runs only the rows whose label starts with it (e.g. "makers:").
+`--only <prefix>` runs only the rows whose label starts with it (e.g. "makers:");
+`--repeated <method>` sets `Gates.repeated` (`gauntlet.REPEATED_METHODS`).
 """
 
 from __future__ import annotations
@@ -379,6 +380,18 @@ GRID = [  # (label, worlds, one_world settings); no edge unless the label says s
      "lasting days (φ = 0.8)", 2000, {**MAKERS_STRESS, "shock": 0.3, "persistence": 0.8}),
     ("makers (held out): NO bids 5–25¢ below the truth, 16 sweeps and news, shock ρ = 0.5 "
      "lasting days (φ = 0.8)", 2000, {**MAKERS, "news": 0.1, "shock": 0.5, "persistence": 0.8}),
+    # held out from the H1 method's choice (`--only H1-shaped` skips them), seeds fixed first
+    ("held out, H1-shaped: H1's NO cutoffs, half spread 1¢, shock ρ = 0.5 lasting days "
+     "(φ = 0.8)", 2000, {**H1_SHAPED, "shock": 0.5, "persistence": 0.8}),
+    ("held out, H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, binaries only, shock "
+     "ρ = 0.3 lasting days (φ = 0.5)", 2000,
+     {**H1_COUPLED, "bucket_share": 0.0, "shock": 0.3, "persistence": 0.5}),
+    ("held out, H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, ladders all strike "
+     "ladders, shock ρ = 0.5 lasting days (φ = 0.8)", 2000,
+     {**H1_COUPLED, "strike_share": 1.0, "shock": 0.5, "persistence": 0.8}),
+    ("held out, H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, noisier signals (σ = 1), "
+     "shock ρ = 0.5 lasting days (φ = 0.8)", 2000,
+     {**H1_COUPLED, "signal": 1.0, "shock": 0.5, "persistence": 0.8}),
 ]
 POWER_COLUMNS = ["naive in-sample", "null", "null + DSR", "null + DSR + PBO", "Romano–Wolf",
                  "widened null", "gauntlet"]
@@ -406,25 +419,29 @@ POWER_HEADER = ("| Edge world | true net edge per position | positions/day | "
                 + " | ".join(POWER_COLUMNS) + " |")
 
 
-def _rows(grid: list, scale: float, seed: int = 0, only: str = "", **extra):
+def _rows(grid: list, scale: float, seed: int = 0, only: str = "", repeated: str = "",
+          **extra):
     """(label, worlds, settings, `one_world` results) for each row of a grid whose label
-    starts with `only`, in order, each row seeded by its position in the grid."""
+    starts with `only`, in order, each row seeded by its position in the grid; with
+    `repeated`, under that `Gates.repeated`."""
     for i, (label, worlds, kwargs) in enumerate(grid):
         if not label.startswith(only):
             continue
+        if repeated:
+            kwargs = {**kwargs, "gates": replace(kwargs.get("gates", GATES), repeated=repeated)}
         n = max(20, int(worlds * scale))
         yield label, n, kwargs, simulate(n, seed=seed + i, **extra, **kwargs)
         print(f"{label}: done", file=sys.stderr, flush=True)
 
 
-def report(scale: float = 1.0, only: str = "") -> str:
+def report(scale: float = 1.0, only: str = "", repeated: str = "") -> str:
     """The size and power tables in docs/BACKTESTING.md, from `GRID` (`scale` shrinks it;
     `only`, see `_rows`), then the mean `_coupling` of each row whose positions repeat
     (makers, H1-shaped)."""
     size = [SIZE_HEADER, "|---|---|---|---|---|" + "---|" * len(PROCEDURES)]
     power = [POWER_HEADER, "|---|---|---|" + "---|" * len(POWER_COLUMNS)]
     coupling = []
-    for label, n, kwargs, results in _rows(GRID, scale, only=only):
+    for label, n, kwargs, results in _rows(GRID, scale, only=only, repeated=repeated):
         by_alpha = {a: rates(results, a) for a in (GATES.alpha, GATES.level)}
         r = by_alpha[GATES.alpha]
         if not math.isnan(r["coupling"]):  # positions repeat (NaN if a world has none)
@@ -466,6 +483,9 @@ PREDICTION_GRID = [  # (label, worlds, one_world settings): edges on every contr
     ("H1-shaped: 1¢ lower asks, NO at YES ≤ 20¢ only, half spread 0.5¢, shock ρ = 0.5 "
      "lasting days (φ = 0.8)", 300, {**H1_COUPLED, "edge": synthetic.Edge(0.0, 1.0, 1),
                                     "shock": 0.5, "persistence": 0.8}),
+    ("held out, H1-shaped: 0.75¢ lower asks, NO at YES ≤ 20¢ only, half spread 0.5¢, shock "
+     "ρ = 0.3 lasting days (φ = 0.5)", 300, {**H1_COUPLED, "edge": synthetic.Edge(0.0, 1.0, 0.75),
+                                            "shock": 0.3, "persistence": 0.5}),
 ]
 PREDICTION_HEADER = ("| Edge world | true net edge per position | widening | power "
                      "predicted / gauntlet's | the same where the cross-day estimate is "
@@ -475,17 +495,24 @@ PREDICTION_HEADER = ("| Edge world | true net edge per position | widening | pow
 def _calibration(results: list[dict[str, float]]) -> str:
     """'predicted / measured' power at α/m, in %, over `results`; bold where predicted
     exceeds measured by more than 2 Monte Carlo standard errors of their per-world
-    difference (the pass rule, docs/BACKTESTING.md step 6)."""
+    difference (the pass rule, docs/BACKTESTING.md step 6): the larger of the sample one
+    and the Bernoulli one under a calibrated prediction, √(Σ p(1 − p))/n, which can't
+    collapse when the gauntlet rejects in no world (runs/h1-revision/candidates.md). ‡
+    marks a cell only the sample one would put in bold."""
     if len(results) < 2:
         return "–"
     predicted = np.array([s["power_predicted"] for s in results])
     found = np.array([PROCEDURES["gauntlet"](s, GATES.level) for s in results], dtype=float)
     gap = predicted - found
     text = f"{100 * predicted.mean():.1f} / {100 * found.mean():.1f}"
-    return f"**{text}**" if gap.mean() > 2 * gap.std(ddof=1) / np.sqrt(len(gap)) else text
+    sample = gap.std(ddof=1) / np.sqrt(len(gap))
+    bernoulli = np.sqrt((predicted * (1 - predicted)).sum()) / len(gap)
+    if gap.mean() > 2 * max(sample, bernoulli):
+        return f"**{text}**"
+    return f"{text} ‡" if gap.mean() > 2 * sample else text
 
 
-def prediction_report(scale: float = 1.0, only: str = "") -> str:
+def prediction_report(scale: float = 1.0, only: str = "", repeated: str = "") -> str:
     """The predicted-vs-measured power table in docs/BACKTESTING.md: `gauntlet.power`'s
     estimate, made as `confirm` makes it with conformance's draws, against how often the
     gauntlet found the edge, both at α/m; again over the worlds whose cross-day estimate
@@ -494,7 +521,7 @@ def prediction_report(scale: float = 1.0, only: str = "") -> str:
     later settlement. `only`: see `_rows`."""
     rows = [PREDICTION_HEADER, "|---|---|---|---|---|"]
     for label, _, _, results in _rows(PREDICTION_GRID, scale, seed=1000, only=only,
-                                      predict=True):
+                                      repeated=repeated, predict=True):
         r, tilted = rates(results), [s for s in results if s["cross_day"] < 0]
         rows.append(f"| {label} | {r['edge_per_position'] / CENT:+.2f}¢ | "
                     f"{r['widening']:.2f} | {_calibration(results)} | "
@@ -503,11 +530,13 @@ def prediction_report(scale: float = 1.0, only: str = "") -> str:
 
 
 if __name__ == "__main__":
-    args, only = sys.argv[1:], ""
-    if "--only" in args:
-        at = args.index("--only")
-        only, args = args[at + 1], args[:at] + args[at + 2:]
+    args, options = sys.argv[1:], {"--only": "", "--repeated": ""}
+    for flag in options:
+        if flag in args:
+            at = args.index(flag)
+            options[flag], args = args[at + 1], args[:at] + args[at + 2:]
+    only, repeated = options["--only"], options["--repeated"]
     if args[:1] == ["power"]:
-        print(prediction_report(float(args[1]) if len(args) > 1 else 1.0, only))
+        print(prediction_report(float(args[1]) if len(args) > 1 else 1.0, only, repeated))
     else:
-        print(report(float(args[0]) if args else 1.0, only))
+        print(report(float(args[0]) if args else 1.0, only, repeated))
