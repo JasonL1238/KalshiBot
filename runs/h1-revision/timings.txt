@@ -1,2 +1,11 @@
 baseline-h1-0.25 rc=0 wall=25972s args=0.25 --only H1-shaped
 baseline-power-0.25 rc=0 wall=7647s args=power 0.25
+BASEDONE
+h1-D-h1-0.25 rc=0 wall=17712s args=0.25 --only 'H1-shaped:' --repeated h1-D
+h1-D-power-1-0.25 rc=0 wall=3038s args=power 0.25 --only '0.5¢' --repeated h1-D
+h1-D-power-2-0.25 rc=0 wall=758s args=power 0.25 --only '1¢' --repeated h1-D
+h1-D-power-3-0.25 rc=0 wall=397s args=power 0.25 --only 'YES' --repeated h1-D
+h1-D-power-4-0.25 rc=0 wall=231s args=power 0.25 --only 'mixed' --repeated h1-D
+h1-D-power-5-0.25 rc=0 wall=1721s args=power 0.25 --only 'makers:' --repeated h1-D
+h1-D-power-6-0.25 rc=0 wall=1924s args=power 0.25 --only 'H1-shaped:' --repeated h1-D
+ALLDONE
