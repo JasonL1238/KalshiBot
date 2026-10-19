@@ -179,8 +179,8 @@ def test_script_runs_end_to_end(script, capsys, monkeypatch, request):
     module = bench(script)
     monkeypatch.setattr(harness, "VERIFY", True)  # replays check each frame's payload
     # a hung replay fails with its stacks, on the stderr pytest keeps for faulthandler
-    faulthandler.dump_traceback_later(
-        300, exit=True, file=request.config.stash[fault_handler_stderr_fd_key])
+    faulthandler.dump_traceback_later(300, exit=True, file=request.config.stash.get(
+        fault_handler_stderr_fd_key, sys.__stderr__.fileno()))  # -p no:faulthandler
     try:
         module.main(**SMALL[script])
     finally:
