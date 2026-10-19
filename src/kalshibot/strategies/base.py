@@ -47,5 +47,7 @@ class Strategy(Protocol):
     def intents(self, data: MarketData, start: datetime, end: datetime,
                 config: dict[str, Any]) -> pd.DataFrame:
         """`INTENT_COLUMNS` for decisions in [start, end), each seeing only what `data`
-        shows at its decision time, with unique intent ids."""
+        shows at its decision time, with unique, non-negative integer intent ids. A window
+        split at a UTC midnight splits them (the research runner evaluates a window in
+        parts)."""
         ...

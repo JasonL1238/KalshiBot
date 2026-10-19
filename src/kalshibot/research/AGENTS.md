@@ -10,9 +10,9 @@ Hypotheses and verdicts: [docs/STRATEGIES.md](../../../docs/STRATEGIES.md).
 | `load.py` | `Loader`: the only way research reads market data (one trade tape, candles, post-hoc masking, lockbox refusal), fee terms (`fee_schedule()`), the data hash trials record (`fingerprint()`), when the tables were fetched (`fetched()`), and the memory-capped DuckDB connection it and the data tests use (`connect()`) |
 | `calibration.py` | Taker calibration by price paid (the favorite–longshot table; the M2 positive control) |
 | `quotes.py` | The null's prices and draws: mids from 1-minute candles, for every market of an exclusive event or the contract alone, searched for a day at a time (`needed`, `mids`); strike ladders read off Kalshi's tickers |
-| `run.py` | The research runner: `discover` (every configuration, recorded), `fetch_candles` (what the null prices from), `confirm` (the family's one confirmation test, with its power and strata), `report` (Tier 2 on it) |
+| `run.py` | The research runner, evaluating a month of decisions at a time (`CHUNK`): `discover` (every configuration, recorded), `fetch_candles` (what the null prices from), `confirm` (the family's one confirmation test, with its power and strata), `report` (Tier 2 on it) |
 | `backtest/` | Tier 1 (`fills.py`, `settle.py`: every verdict) and the Tier-2 engines (model uncertainty) |
-| `backtest/fills.py` | Fill rules from the trade tape (taker: next same-side print; maker: strict trade-through, one fill per sweep); the fill schema; the order the Tier-2 engines read the tape in |
+| `backtest/fills.py` | Fill rules from the trade tape (taker: next same-side print; maker: strict trade-through, one fill per sweep) and how late an order can fill (`reach`); the fill schema; the order the Tier-2 engines read the tape in |
 | `backtest/settle.py` | Net PnL per fill (costliest plausible fee regime, its own rounding or the fee rate itself; settlement value, including scalar results, or a mark at window end) and daily returns on one calendar |
 | `backtest/replay.py` | Tier 2: NautilusTrader replays the tape and fills taker intents its own way; returns fills plus its own PnL |
 | `backtest/bars.py` | Tier 2: vectorbt fills taker intents at 1-minute bar closes; returns fills plus its own PnL |

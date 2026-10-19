@@ -53,7 +53,7 @@ from nautilus_trader.trading.strategy import Strategy
 
 from kalshibot.kalshi.fee_history import FeeSchedule
 from kalshibot.kalshi.models import MICROS, PRICE_SCALE, SIZE_SCALE
-from kalshibot.research.backtest.fills import no_fills, tape_order
+from kalshibot.research.backtest.fills import LATENCY, no_fills, tape_order
 from kalshibot.research.backtest.settle import charged_fee, settled, yes_payoff
 
 KALSHI = Venue("KALSHI")
@@ -121,7 +121,7 @@ def _order(row, instrument: BinaryOption):
 
 def replay(intents: pd.DataFrame, trades: pd.DataFrame, markets: pd.DataFrame,
            series_of: Callable[[str], str], schedule: FeeSchedule, window_end: datetime,
-           precision: int, *, latency: timedelta = timedelta(seconds=1)
+           precision: int, *, latency: timedelta = LATENCY
            ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Fill taker `intents` (`strategies.base.INTENT_COLUMNS`) on `trades` (trade_id, ticker,
     created_time, yes_price, count, taker_side).

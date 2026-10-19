@@ -1,10 +1,13 @@
 """The research runner on a small synthetic market: each day, a two-bucket event whose
 longshot bucket the test strategy buys NO on."""
 
+import hashlib
 import json
+import tracemalloc
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
+from itertools import pairwise
 
 import numpy as np
 import pandas as pd
@@ -303,7 +306,8 @@ def test_confirm_needs_discovery_as_configured_now(market):
 
 def test_decisions_stay_inside_their_window_and_holding_period(market):
     s = BuyNoEachMorning()
-    filled, outside = run._fills(s, market, {"count": 100}, D0, D0 + timedelta(days=10))
+    evaluated = run._evaluate(s, market, {"count": 100}, D0, D0 + timedelta(days=10))
+    filled, outside = evaluated.fills, evaluated.outside_hold
     days = filled["priced_at"].dt.floor("D")
     assert (filled["priced_at"].dt.strftime("%H:%M") == "09:59").all()  # a taker's decision
     assert outside == 0
@@ -315,8 +319,49 @@ def test_decisions_stay_inside_their_window_and_holding_period(market):
             return pd.DataFrame([(0, "LONG", "no", start + timedelta(hours=1), 100, None)],
                                 columns=INTENT_COLUMNS)
 
-    filled, outside = run._fills(Long(), market, {}, D0, D0 + timedelta(days=10))
-    assert filled.empty and outside == 1
+    evaluated = run._evaluate(Long(), market, {}, D0, D0 + timedelta(days=10))
+    assert evaluated.fills.empty and evaluated.outside_hold == 1
+
+
+class Fixed(BuyNoEachMorning):
+    """The same intents (ids, decision times) whatever the window."""
+
+    def __init__(self, ids, times):
+        self.rows = [(n, "KXT-2025-01-03", "no", t, 100, None)
+                     for n, t in zip(ids, times, strict=True)]
+
+    def intents(self, data, start, end, config):
+        return pd.DataFrame(self.rows, columns=INTENT_COLUMNS)
+
+
+@pytest.mark.parametrize(("ids", "times", "refusal"), [
+    ([0, -1], [3, 4], "integer intent ids"), ([0, 0.5], [3, 4], "integer intent ids"),
+    ([1, 1], [3, 4], "integer intent ids"),
+    ([0, 1], [3, 0], "outside"), ([0, 1], [3, 9], "outside"), ([0, 1], [3, None], "outside")])
+def test_the_runner_refuses_intents_off_the_contract(market, ids, times, refusal):
+    times = [pd.NaT if d is None else D0 + timedelta(days=d, hours=10) for d in times]
+    with pytest.raises(ValueError, match=refusal):  # decisions in [D0 + 1, D0 + 9)
+        run._evaluate(Fixed(ids, times), market, {}, D0, D0 + timedelta(days=10))
+
+
+def test_the_runner_refuses_an_order_that_can_fill_past_max_hold(market):
+    class LongBid(RestingNo):  # a bid resting as long as a position may be held
+        def configs(self):
+            return {"one": {"count": 200, "maker": True, "horizon": timedelta(days=1)}}
+
+    class QuickTaker(BuyNoEachMorning):  # a taker waits up to 5 minutes
+        max_hold = timedelta(minutes=5)
+
+    for strategy in (LongBid(), QuickTaker()):
+        with pytest.raises(ValueError, match="past max_hold"):
+            run.discover(strategy, market)
+    assert ledger.trials("HX") == []  # before any configuration is recorded
+
+
+def inside(intents: pd.DataFrame, start, end) -> pd.DataFrame:
+    """The intents decided in [start, end), all a strategy may return for that window."""
+    t = intents["decision_time"]
+    return intents[(t >= start) & (t < end)]
 
 
 class RestingNo(BuyNoEachMorning):
@@ -329,15 +374,15 @@ class RestingNo(BuyNoEachMorning):
 
     def intents(self, data, start, end, config):
         bids = super().intents(data, start, end, config)
-        return bids.assign(decision_time=bids["decision_time"] - timedelta(hours=12),
-                           limit=9500)
+        return inside(bids.assign(decision_time=bids["decision_time"] - timedelta(hours=12),
+                                  limit=9500), start, end)
 
 
 def test_a_makers_fills_are_priced_and_dated_when_they_fill(market, monkeypatch,
                                                             power_calls):
     monkeypatch.setattr(fills, "maker_fills", partial(fills.maker_fills, queue_haircut=0.0))
     strategy, config = RestingNo(), RestingNo().configs()["one"]
-    got, _ = run._fills(strategy, market, config, D0, D0 + timedelta(10))
+    got = run._evaluate(strategy, market, config, D0, D0 + timedelta(10)).fills
     assert (got.groupby("intent_id").size() == 2).all() and (got["fill_count"] == 100).all()
     assert (got["priced_at"] == got["fill_time"]).all()
     run.discover(strategy, market)
@@ -347,7 +392,7 @@ def test_a_makers_fills_are_priced_and_dated_when_they_fill(market, monkeypatch,
     # priced at the decision, before the longshot listed, none would be tested, and power
     # would date each position a day early
     assert done["tested"] == done["positions"] == 2 * done["intents"]["count"] > 0
-    tested, _ = run._fills(strategy, market, config, *calendar.confirmation_window("HX"))
+    tested = run._evaluate(strategy, market, config, *calendar.confirmation_window("HX")).fills
     fill_days = (settle.close_day(tested["fill_time"]) - run._EPOCH).dt.days
     assert set(power_calls[0].day) == set(fill_days)
 
@@ -372,7 +417,108 @@ def test_maker_intents_rest_one_bid_per_contract_with_a_limit(market):
                                                 + timedelta(hours=1))], ignore_index=True)
 
     with pytest.raises(ValueError, match="one bid per contract"):  # the runner checks
-        run._fills(Twice(), market, Twice().configs()["one"], D0, D0 + timedelta(10))
+        run._evaluate(Twice(), market, Twice().configs()["one"], D0, D0 + timedelta(10))
+
+    class Straddle(RestingNo):  # the last of one contract's bids in January, an hour
+        def intents(self, data, start, end, config):  # before February's first
+            return inside(pd.DataFrame([(n, "KXT-2025-02-01", "no", pd.Timestamp(
+                "2025-02-01", tz="UTC") + timedelta(hours=h), 100, 9500.0) for n, h in enumerate(
+                (-14, -1, 1))], columns=INTENT_COLUMNS), start, end)
+
+    with pytest.raises(ValueError, match="one bid per contract"):  # across months too
+        run._evaluate(Straddle(), market, Straddle().configs()["one"],
+                      *calendar.confirmation_window("HX"))
+
+
+def test_a_bid_decided_before_a_month_ends_fills_after_it(market, monkeypatch):
+    monkeypatch.setattr(fills, "maker_fills", partial(fills.maker_fills, queue_haircut=0.0))
+
+    class LateBid(RestingNo):  # on Jan 31, for the longshot of Feb 1
+        def intents(self, data, start, end, config):
+            return inside(pd.DataFrame([(0, "KXT-2025-02-01", "no", pd.Timestamp(
+                "2025-01-31 21:59", tz="UTC"), 200, 9500.0)], columns=INTENT_COLUMNS), start, end)
+
+    got = run._evaluate(LateBid(), market, LateBid().configs()["one"],
+                        *calendar.confirmation_window("HX")).fills
+    assert got["fill_time"].tolist() == [pd.Timestamp(f"2025-02-01 {t}", tz="UTC")
+                                         for t in ("09:00", "10:01")]
+
+
+def test_a_window_is_evaluated_a_month_at_a_time_as_if_whole(market, monkeypatch):
+    strategy, window = BuyNoEachMorning(), calendar.confirmation_window("HX")
+    calls, intents = [], strategy.intents
+
+    def seen(data, a, b, config):  # nothing from the end of its part on
+        calls.append((a, b))
+        far = b + timedelta(days=30)
+        assert data.trades(a, far).aggregate("max(created_time)").fetchone()[0] < b
+        assert data.markets(far).aggregate("max(created_time)").fetchone()[0] < b
+        return intents(data, a, b, config)
+
+    monkeypatch.setattr(strategy, "intents", seen)
+    got = {}
+    for chunk, cuts in (("YS", []), ("MS", [datetime(2025, 2, 1, tzinfo=UTC)]),
+                        ("D", [D0 + timedelta(days=d) for d in range(22, 39)])):
+        calls.clear()
+        monkeypatch.setattr(run, "CHUNK", chunk)
+        got[chunk] = run._evaluate(strategy, market, {"count": 100}, *window, keep=True)
+        assert calls == list(pairwise([D0 + timedelta(21), *cuts, D0 + timedelta(39)]))
+
+    def decided(e):  # the fixture strategy numbers its intents in no particular order
+        when = e.intents.set_index("intent_id")["decision_time"]
+        return (e.intents.drop(columns="intent_id").sort_values("decision_time",
+                                                                 ignore_index=True),
+                e.fills.assign(intent_id=e.fills["intent_id"].map(when)))
+
+    whole = decided(got["YS"])
+    assert len(whole[0]) == 18 and len(whole[1]) == 18
+    for chunk in ("MS", "D"):
+        assert got[chunk].intents["intent_id"].is_unique
+        assert got[chunk].outside_hold == got["YS"].outside_hold
+        for part, full in zip(decided(got[chunk]), whole, strict=True):
+            assert part.equals(full)
+    calls.clear()  # a window starting at noon is still cut at midnight
+    monkeypatch.setattr(run, "CHUNK", "MS")
+    run._evaluate(strategy, market, {"count": 100}, window[0] + timedelta(hours=12), window[1])
+    assert calls[0][1] == datetime(2025, 2, 1, tzinfo=UTC)
+
+
+def test_the_intents_digest_is_the_whole_sets_fed_in_any_parts():
+    t = pd.Timestamp("2026-01-05", tz="UTC")
+    intents = pd.DataFrame([(n, f"T{n % 3}", "no", t + timedelta(minutes=n), 100, 9500.0)
+                            for n in range(7)], columns=INTENT_COLUMNS)
+    rows = intents.to_json(orient="values", date_format="iso", date_unit="ns")
+    whole = {"count": 7, "sha256": hashlib.sha256(rows.encode()).hexdigest()}
+    for cuts in ([], [3], [0, 2, 2, 6]):
+        digest = run._Digest()
+        for i, j in pairwise([0, *cuts, 7]):
+            digest.add(intents.iloc[i:j])
+        assert digest.value() == whole
+    assert run._Digest().value() == {"count": 0, "sha256": hashlib.sha256(b"[]").hexdigest()}
+
+
+def test_memory_holds_one_parts_intents(market, monkeypatch):
+    class Dense(BuyNoEachMorning):  # a NO bid every 30 s on each day's longshot until 20:00
+        def configs(self):
+            return {"one": {"count": 100, "maker": True, "horizon": timedelta(seconds=30)}}
+
+        def intents(self, data, start, end, config):
+            t = pd.date_range(start, end, freq="30s", inclusive="left")
+            t = t[t - t.floor("D") < pd.Timedelta(hours=20)]
+            return pd.DataFrame({"intent_id": range(len(t)), "ticker": "KXT-" + t.strftime("%F"),
+                                 "side": "no", "decision_time": t, "count": 100, "limit": 9500.0},
+                                columns=INTENT_COLUMNS)
+
+    def peak(chunk):
+        monkeypatch.setattr(run, "CHUNK", chunk)
+        tracemalloc.start()
+        run._evaluate(Dense(), market, Dense().configs()["one"],
+                      *calendar.confirmation_window("HX"))
+        top = tracemalloc.get_traced_memory()[1]
+        tracemalloc.stop()
+        return top
+
+    assert peak("D") < peak("YS") / 4  # 18 days of bids: a day's at a time, not all at once
 
 
 def test_a_configuration_that_never_trades_scores_zero(market):
@@ -381,6 +527,6 @@ def test_a_configuration_that_never_trades_scores_zero(market):
             return pd.DataFrame(columns=INTENT_COLUMNS)
 
     end = D0 + timedelta(days=10)
-    positions = run._settled(market, run._fills(Idle(), market, {}, D0, end)[0], end)
+    positions = run._settled(market, run._evaluate(Idle(), market, {}, D0, end).fills, end)
     returns = settle.daily_returns(positions, D0, end)
     assert positions.empty and len(returns) == 10 and (returns == 0).all()

@@ -1,4 +1,5 @@
 from datetime import UTC, date, datetime, timedelta
+from itertools import pairwise
 
 import pandas as pd
 import pytest
@@ -53,3 +54,13 @@ def test_intents_before_t_do_not_change_when_the_window_ends_at_t(tape, cut):
         early = H1.intents(tape, START, T(cut).to_pydatetime(), config)
         kept = whole[whole["decision_time"] < T(cut)].drop(columns="intent_id")
         assert early.drop(columns="intent_id").equals(kept.reset_index(drop=True))
+
+
+@pytest.mark.parametrize("cut", ["2025-10-02", "2025-10-03"])
+def test_a_window_split_at_a_utc_midnight_splits_its_intents(tape, cut):
+    for config in H1.configs().values():
+        whole = H1.intents(tape, START, END, config)
+        parts = [H1.intents(tape, a, b, config) for a, b in pairwise(
+            [START, T(cut).to_pydatetime(), END])]
+        split = pd.concat([p for p in parts if len(p)] or parts[:1], ignore_index=True)
+        assert split.drop(columns="intent_id").equals(whole.drop(columns="intent_id"))

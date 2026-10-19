@@ -28,7 +28,7 @@ import hashlib
 from collections.abc import Callable
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta
-from itertools import batched
+from itertools import batched, pairwise
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -46,6 +46,9 @@ from kalshibot.strategies.base import INTENT_COLUMNS, Strategy
 
 _EPOCH = pd.Timestamp("1970-01-01", tz="UTC")
 TIER2_MARKETS = 200  # markets per Tier-2 batch (vectorbt holds a bars × markets matrix)
+# Decisions are evaluated a calendar month at a time (a pandas frequency of whole days or
+# longer, so parts are cut at UTC midnights)
+CHUNK = "MS"
 _Window = tuple[datetime, datetime]
 
 
@@ -69,58 +72,100 @@ class _Until:
 
 
 def _check(strategy: Strategy, loader: Loader) -> None:
-    ledger.ledger_dir()  # no ledger to record in: refuse before doing any work
+    """Refuse before any work: no ledger to record in, a loader for another family, or an
+    order that can fill past max_hold (each part's fill tape ends max_hold later)."""
+    ledger.ledger_dir()
     if loader.family != strategy.family:
         raise ValueError(f"the loader reads for {loader.family!r}, not {strategy.family!r}")
+    for name, config in strategy.configs().items():
+        reach = fills.reach(config["horizon"] if config.get("maker") else None)
+        if reach > strategy.max_hold:
+            raise ValueError(f"{strategy.family} {name!r}: an order can fill {reach} after "
+                             "its decision, past max_hold")
 
 
-def _intents(strategy: Strategy, loader: Loader, config: dict[str, Any], start: datetime,
-             end: datetime) -> tuple[pd.DataFrame, int]:
-    """The configuration's intents decided in [start + max_hold, end − max_hold) on
-    markets whose as-listed latest expiration is at most max_hold later, and how many
-    intents in that span the latter rule dropped."""
-    hold, con = strategy.max_hold, loader.con
+class _Evaluated(NamedTuple):
+    """A configuration's Tier-1 evaluation on a window, read before any outcome."""
+
+    fills: pd.DataFrame  # as `_fill` gives them
+    outside_hold: int  # intents the holding rule dropped
+    digest: dict  # the intents' `_Digest`
+    intents: pd.DataFrame | None  # the intents themselves, if asked for
+
+
+def _evaluate(strategy: Strategy, loader: Loader, config: dict[str, Any], start: datetime,
+              end: datetime, *, keep: bool = False) -> _Evaluated:
+    """Tier-1 fills of the configuration's intents decided in [start + max_hold,
+    end − max_hold) on markets whose as-listed latest expiration is at most max_hold
+    later; how many intents in that span the latter rule dropped.
+
+    A `CHUNK` at a time, cut at UTC midnights, so memory holds one part's intents: the
+    strategy decides each part seeing nothing after it (`Strategy.intents` splits there),
+    each part's intent ids follow the last part's, and its fills come from the tape up to
+    max_hold after it (no fill comes later: `_check`)."""
+    hold, family = strategy.max_hold, strategy.family
     first, last = start + hold, end - hold
-    intents = strategy.intents(_Until(loader, last), first, last, config)
-    if list(intents.columns) != INTENT_COLUMNS or intents["intent_id"].duplicated().any():
-        raise ValueError(f"{strategy.family} intents need columns {INTENT_COLUMNS} and "
-                         "unique intent ids")
-    intents = intents.astype({"ticker": str, "side": str, "count": "int64", "limit": "float64",
+    cuts = [c for c in pd.date_range(pd.Timestamp(first).floor("D"), last, freq=CHUNK)
+            if first < c < last]
+    digest, filled, kept, outside, offset = _Digest(), [], [], 0, 0
+    bids = pd.DataFrame(columns=INTENT_COLUMNS)  # each contract's latest bid so far
+    for a, b in pairwise([first, *(c.to_pydatetime() for c in cuts), last]):
+        intents = _checked(strategy.intents(_Until(loader, b), a, b, config), family, a, b)
+        t = intents["decision_time"]
+        intents["intent_id"] += offset
+        offset = int(intents["intent_id"].max()) + 1 if len(intents) else offset
+        if config.get("maker") and len(intents):
+            bids = _resting(pd.concat([bids, intents]) if len(bids) else intents,
+                            config["horizon"], family)
+        latest = loader.markets(last).project("ticker, latest_expiration_time").join(
+            loader.con.from_df(intents[["ticker"]].drop_duplicates()), "ticker").df(
+            ).set_index("ticker")["latest_expiration_time"]
+        anchored = (intents["ticker"].map(latest) - t <= hold).to_numpy()
+        outside += int((~anchored).sum())
+        intents = intents[anchored].reset_index(drop=True)
+        digest.add(intents)
+        filled.append(_fill(loader, intents, config, a, b + hold))
+        if keep:
+            kept.append(intents)
+    return _Evaluated(pd.concat([f for f in filled if len(f)] or filled[:1], ignore_index=True),
+                      outside, digest.value(), pd.concat(kept, ignore_index=True) if keep else None)
+
+
+def _checked(intents: pd.DataFrame, family: str, start: datetime, end: datetime
+             ) -> pd.DataFrame:
+    """A strategy's intents for [start, end), cast to the intent schema's types; refused
+    unless they keep its contract (`Strategy.intents`)."""
+    if list(intents.columns) != INTENT_COLUMNS:
+        raise ValueError(f"{family} intents need columns {INTENT_COLUMNS}")
+    ids = pd.to_numeric(intents["intent_id"], errors="coerce")
+    if ids.isna().any() or (ids < 0).any() or (ids % 1 != 0).any() or ids.duplicated().any():
+        raise ValueError(f"{family} intents need unique, non-negative integer intent ids")
+    intents = intents.astype({"intent_id": "int64", "ticker": str, "side": str,
+                              "count": "int64", "limit": "float64",
                               "decision_time": "datetime64[ns, UTC]"})
-    if config.get("maker"):
-        _resting(intents, config["horizon"], strategy.family)
-    tickers = con.from_df(intents[["ticker"]].drop_duplicates())
-    latest = loader.markets(last).project("ticker, latest_expiration_time").join(
-        tickers, "ticker").df().set_index("ticker")["latest_expiration_time"]
     t = intents["decision_time"]
-    inside = ((t >= first) & (t < last)).to_numpy()
-    anchored = (intents["ticker"].map(latest) - t <= hold).to_numpy()
-    return intents[inside & anchored].reset_index(drop=True), int((inside & ~anchored).sum())
+    if not ((t >= start) & (t < end)).all():
+        raise ValueError(f"{family} intents decided outside the window [{start}, {end})")
+    return intents
 
 
-def _resting(intents: pd.DataFrame, horizon: timedelta, family: str) -> None:
+def _resting(intents: pd.DataFrame, horizon: timedelta, family: str) -> pd.DataFrame:
     """Refuse maker intents Tier 1 can't fill as one trader's: a bid without a limit, or
     two bids for one contract within `horizon` (each would take its share of the same
-    sweep)."""
-    gaps = intents.sort_values("decision_time").groupby(["ticker", "side"])["decision_time"]
+    sweep). Returns each contract's latest bid."""
+    ordered = intents.sort_values("decision_time")
+    gaps = ordered.groupby(["ticker", "side"])["decision_time"]
     if intents["limit"].isna().any() or (gaps.diff() < horizon).any():
         raise ValueError(f"{family} maker intents need a limit, and at most one bid per "
                          "contract resting at a time")
-
-
-def _fills(strategy: Strategy, loader: Loader, config: dict[str, Any], start: datetime,
-           end: datetime) -> tuple[pd.DataFrame, int]:
-    """Tier-1 fills of `_intents`, as `_fill` gives them, and how many intents its
-    holding rule dropped."""
-    intents, outside = _intents(strategy, loader, config, start, end)
-    return _fill(loader, intents, config, start, end), outside
+    return ordered.groupby(["ticker", "side"]).tail(1)
 
 
 def _fill(loader: Loader, intents: pd.DataFrame, config: dict[str, Any], start: datetime,
           end: datetime) -> pd.DataFrame:
     """Tier-1 fills of `intents`, each with the time the null prices it at (`priced_at`):
     a taker's decision, a maker's fill (BACKTESTING, Prices). The fill rules run in the
-    loader's DuckDB, on the tape of the markets traded only."""
+    loader's DuckDB, on the tape of the markets traded only, in [start, end)."""
     con = loader.con
     con.register("run_intents", intents)
     loader.trades(start, end).join(con.from_df(intents[["ticker"]].drop_duplicates()),
@@ -180,11 +225,25 @@ def _same_trial(recorded: dict, strategy: Strategy, name: str, config: dict[str,
         _trial(strategy, name, config, window))
 
 
-def _digest(intents: pd.DataFrame) -> dict:
-    """What identifies a set of intents: how many, and a hash of them all."""
-    rows = intents.sort_values("intent_id").to_json(orient="values", date_format="iso",
-                                                     date_unit="ns")
-    return {"count": len(intents), "sha256": hashlib.sha256(rows.encode()).hexdigest()}
+class _Digest:
+    """What identifies a set of intents: how many, and a SHA-256 of their rows as one
+    JSON array in intent-id order, fed in parts (the bytes of the whole set at once)."""
+
+    def __init__(self) -> None:
+        self._sha, self._count = hashlib.sha256(b"["), 0
+
+    def add(self, intents: pd.DataFrame) -> None:
+        """Intents whose ids all follow those added before."""
+        if len(intents):
+            rows = intents.sort_values("intent_id").to_json(
+                orient="values", date_format="iso", date_unit="ns")[1:-1]
+            self._sha.update((("," if self._count else "") + rows).encode())
+            self._count += len(intents)
+
+    def value(self) -> dict:
+        sha = self._sha.copy()
+        sha.update(b"]")
+        return {"count": self._count, "sha256": sha.hexdigest()}
 
 
 def _totals(positions: pd.DataFrame) -> dict:
@@ -205,11 +264,12 @@ def discover(strategy: Strategy, loader: Loader) -> pd.DataFrame:
     data = loader.fingerprint([window])
     out = {}
     for name, config in strategy.configs().items():
-        filled, outside = _fills(strategy, loader, config, start, end)
-        positions = _settled(loader, filled, end)
+        evaluated = _evaluate(strategy, loader, config, start, end)
+        positions = _settled(loader, evaluated.fills, end)
         returns = settle.daily_returns(positions, start, end)
         ledger.record_trial(strategy.family, _trial(strategy, name, config, window),
-                            "discovery", data, returns, _summary(positions, returns, outside))
+                            "discovery", data, returns,
+                            _summary(positions, returns, evaluated.outside_hold))
         out[name] = returns
     return pd.DataFrame(out)
 
@@ -240,7 +300,7 @@ def _dependence_fills(strategy: Strategy, loader: Loader) -> pd.DataFrame:
     (start, end), _ = _windows(strategy.family)
     first = max(start, end - strategy.max_hold
                 - timedelta(days=gauntlet.PREREGISTERED.dependence_days) - strategy.max_hold)
-    return gauntlet.pooled([_fills(strategy, loader, c, first, end)[0]
+    return gauntlet.pooled([_evaluate(strategy, loader, c, first, end).fills
                             for c in strategy.configs().values()])
 
 
@@ -250,7 +310,7 @@ class _Plan(NamedTuple):
     discovery: pd.DataFrame  # days × configurations of discovery returns
     trials: list[dict]  # the discovery trials they come from
     selected: str  # the configuration discovery selected
-    intents: dict  # its confirmation intents' `_digest`
+    digest: dict  # its confirmation intents' `_Digest`
     fills: pd.DataFrame  # its confirmation fills
     outside_hold: int  # intents the holding rule dropped from those
     dependence: pd.DataFrame  # the dependence sample's fills
@@ -260,11 +320,9 @@ def _plan(strategy: Strategy, loader: Loader) -> _Plan:
     discovery, trials = _discovery(strategy)
     selected = gauntlet.select(discovery)
     _, (start, end) = _windows(strategy.family)
-    config = strategy.configs()[selected]
-    intents, outside = _intents(strategy, loader, config, start, end)
-    return _Plan(discovery, trials, selected, _digest(intents),
-                 _fill(loader, intents, config, start, end), outside,
-                 _dependence_fills(strategy, loader))
+    tested = _evaluate(strategy, loader, strategy.configs()[selected], start, end)
+    return _Plan(discovery, trials, selected, tested.digest, tested.fills,
+                 tested.outside_hold, _dependence_fills(strategy, loader))
 
 
 def fetch_candles(strategy: Strategy, loader: Loader, workers: int = 2,
@@ -356,7 +414,7 @@ def confirm(strategy: Strategy, loader: Loader) -> gauntlet.Verdict:
     ledger.record_trial(family, trial, "confirmation", data, returns, {
         "verdict": asdict(verdict) | {"p_value": verdict.p_value}, "power": power,
         **_summary(positions, returns, plan.outside_hold), "tested": len(tested.net_pnl),
-        "dropped_from_null": dropped, "seed": seed, "intents": plan.intents,
+        "dropped_from_null": dropped, "seed": seed, "intents": plan.digest,
         "by_category": {c: _totals(g) for c, g in positions.groupby(
             positions["ticker"].map(categories).fillna("unknown"))},
         "discovery_trials": [t["trial_id"] for t in plan.trials]})
@@ -400,10 +458,10 @@ def report(strategy: Strategy, loader: Loader) -> dict:
 def _tiers(strategy: Strategy, loader: Loader, config: dict[str, Any], recorded: dict,
            window: _Window) -> dict:
     start, end = window
-    intents, _ = _intents(strategy, loader, config, start, end)
-    tier1 = _settled(loader, _fill(loader, intents, config, start, end), end)
+    evaluated = _evaluate(strategy, loader, config, start, end, keep=True)
+    intents, tier1 = evaluated.intents, _settled(loader, evaluated.fills, end)
     totals = _totals(tier1)
-    if _digest(intents) != recorded["intents"] or totals != {k: recorded[k] for k in totals}:
+    if evaluated.digest != recorded["intents"] or totals != {k: recorded[k] for k in totals}:
         raise RuntimeError(f"{strategy.family}'s intents or Tier 1 are no longer what its "
                            "confirmation recorded: the code or data changed since")
     schedule = loader.fee_schedule()

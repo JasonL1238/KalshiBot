@@ -65,7 +65,7 @@ PRINTS = [  # ticker, time, taker side, YES price, size, block trade
 def tape(tmp_path, monkeypatch):
     monkeypatch.setenv("KALSHIBOT_LEDGER", str(tmp_path))  # no unlock here: lockbox closed
     kalshi = tmp_path / "raw" / "kalshi"
-    for n in range(18):  # 2025-09-16, the window's start less H8's lookback, to 10-03
+    for n in range(33):  # the runner's window: 15 days either side of [START, END)
         day = date(2025, 9, 16) + timedelta(n)
         rows = [{"trade_id": f"t{k}", "ticker": t, "created_time": T(ts), "taker_side": side,
                  "yes_price": p, "count": size, "is_block_trade": block}
@@ -118,9 +118,15 @@ def test_the_listed_start_is_expiration_less_its_leagues_offset_in_its_era(event
 def test_listings_without_a_registered_start_are_logged_and_get_no_bids(tape, caplog):
     with caplog.at_level(logging.WARNING, logger=deep_bids.__name__):
         intents = H8.intents(tape, START, END, CONFIG)
-    assert "4 listings, by series: {'KXMLBGAME': 2, 'KXNHLGAME': 2}" in caplog.text
+    assert "2 listings, by series: {'KXMLBGAME': 2}" in caplog.text  # the game in the window
     # only the exclusive two-market events of H8's leagues with a listed start
     assert set(intents["ticker"]) == {NYY, BOS, NYR, BOS2, LVA, NYL, GON, SMC}
+    listed = tape.markets(END).filter("series_ticker IN ('KXMLBGAME', 'KXNHLGAME')").df()
+    for day, counted in (("2025-09-18", ["KXNHLGAME"] * 2), ("2025-09-19", [])):
+        when = T(day).to_pydatetime()  # a dateless ticker counts on the day it was listed;
+        # LADSDP, listed long before, on its game day (Oct 2), after these windows
+        assert deep_bids._live(listed, when, when + timedelta(1), CONFIG["horizon"])[
+            1].tolist() == counted
 
 
 def test_a_bid_every_10_s_from_the_listed_start_until_the_cap(tape):
@@ -212,9 +218,11 @@ def test_where_the_window_starts_does_not_change_later_bids(tape, later):
 
 def test_the_runner_rests_them_and_tier1_fills_20_contracts_through_only(tape):
     # the runner's window, embargoes included; it refuses bids `run._resting` doesn't take
-    intents, outside = run._intents(H8, tape, CONFIG, START - H8.max_hold, END + H8.max_hold)
-    assert outside == 0 and len(intents) == len(H8.intents(tape, START, END, CONFIG))
-    got = run._fill(tape, intents, CONFIG, START, END)  # Tier 1's participation and haircut
+    evaluated = run._evaluate(H8, tape, CONFIG, START - H8.max_hold, END + H8.max_hold,
+                              keep=True)
+    intents, got = evaluated.intents, evaluated.fills  # Tier 1's participation and haircut
+    assert evaluated.outside_hold == 0 and len(intents) == len(H8.intents(tape, START, END,
+                                                                          CONFIG))
     assert got[["ticker", "fill_time", "fill_price", "fill_count"]].values.tolist() == [
         [NYR, T("2025-10-02 23:00:05"), 3000, SIZE_SCALE]]
     decided = intents.set_index("intent_id").loc[got["intent_id"].iloc[0], "decision_time"]
@@ -222,3 +230,14 @@ def test_the_runner_rests_them_and_tier1_fills_20_contracts_through_only(tape):
     assert bids(intents, NYR)[T("2025-10-02 23:00")] == 3000  # filled: 20 through it
     assert bids(intents, BOS2)[T("2025-10-02 23:00")] == 3000  # unfilled: 19 through it
     assert bids(intents, BOS2)[T("2025-10-02 23:00:20")] == 500  # the bid the 95¢ print met
+
+
+def test_the_runner_evaluates_it_in_parts_as_if_whole(tape, monkeypatch):
+    got = []
+    for chunk in ("YS", "D"):  # whole; split at midnights, games in play across them
+        monkeypatch.setattr(run, "CHUNK", chunk)
+        got.append(run._evaluate(H8, tape, CONFIG, START - H8.max_hold, END + H8.max_hold,
+                                 keep=True))
+    whole, part = got
+    assert part.intents.equals(whole.intents) and part.fills.equals(whole.fills)
+    assert part.digest == whole.digest and part.outside_hold == whole.outside_hold

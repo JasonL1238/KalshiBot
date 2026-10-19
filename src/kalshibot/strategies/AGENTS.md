@@ -17,9 +17,11 @@ families there.
 ## Rules for code here
 
 - A strategy sees only what its `MarketData` shows at each decision time; never read
-  files directly. The research runner shows it nothing after the window it decides in;
-  within the window, each strategy's tests include a truncation test (its intents
-  before t don't change when the window ends at t).
+  files directly. The research runner evaluates a window in parts (`research/run.py`'s
+  `CHUNK`) and shows the strategy nothing after the part it decides in. Each strategy's
+  tests include a truncation test (its intents before t don't change when the window
+  ends at t) and a split test (a window split at a UTC midnight gives the halves'
+  intents).
 - Configurations are fixed at pre-registration: adding one later is a new trial in the
   family's ledger, not an edit. So are `max_hold` and `min_edge`: every trial records
   them, and `confirm` refuses if they changed since discovery.

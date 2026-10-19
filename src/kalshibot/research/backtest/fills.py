@@ -34,6 +34,8 @@ import pandas as pd
 from kalshibot.kalshi.models import PRICE_SCALE, SIZE_SCALE
 
 FILL_COLUMNS = ["intent_id", "ticker", "side", "fill_time", "fill_price", "fill_count", "maker"]
+LATENCY = timedelta(seconds=1)  # from a decision to its order resting or taking
+MAX_WAIT = timedelta(minutes=5)  # how long a taker order waits for a print
 
 
 def _whole(size: str) -> str:
@@ -51,9 +53,14 @@ def tape_order(trades: pd.DataFrame) -> pd.DataFrame:
     return trades.sort_values(["created_time", "trade_id"])
 
 
+def reach(horizon: timedelta | None) -> timedelta:
+    """How long after its decision an order can fill: a bid resting for `horizon`, or a
+    taker (None)."""
+    return LATENCY + (MAX_WAIT if horizon is None else horizon)
+
+
 def taker_fills(con: duckdb.DuckDBPyConnection, intents: str, trades: str,
-                latency: timedelta = timedelta(seconds=1),
-                max_wait: timedelta = timedelta(minutes=5),
+                latency: timedelta = LATENCY, max_wait: timedelta = MAX_WAIT,
                 participation: float = 0.1) -> duckdb.DuckDBPyRelation:
     """`intents` and `trades` name relations visible to `con` (tables, views, or DataFrames)."""
     return con.sql(f"""
@@ -78,7 +85,7 @@ def taker_fills(con: duckdb.DuckDBPyConnection, intents: str, trades: str,
 
 
 def maker_fills(con: duckdb.DuckDBPyConnection, intents: str, trades: str,
-                horizon: timedelta, latency: timedelta = timedelta(seconds=1),
+                horizon: timedelta, latency: timedelta = LATENCY,
                 queue_haircut: float = 0.5, participation: float = 0.1) -> duckdb.DuckDBPyRelation:
     """Resting bids at `limit` for the contract `side`, live from decision_time + latency
     for `horizon`: one fill per sweep through the bid."""

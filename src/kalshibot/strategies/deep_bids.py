@@ -112,10 +112,15 @@ class DeepBids:
             "limit": chosen["limit"]}, columns=INTENT_COLUMNS)
 
 
+def _game_day(markets: pd.DataFrame) -> pd.Series:
+    """The date in each market's event ticker (US Eastern, naive); NaT without one."""
+    return pd.to_datetime(markets["event_ticker"].str.extract(
+        r"^[^-]+-(\d\d[A-Z]{3}\d\d)", expand=False), format="%y%b%d", errors="coerce")
+
+
 def _listed_start(markets: pd.DataFrame) -> pd.Series:
     """Each market's listed start (module docstring, Live); NaT without a registered one."""
-    day = pd.to_datetime(markets["event_ticker"].str.extract(
-        r"^[^-]+-(\d\d[A-Z]{3}\d\d)", expand=False), format="%y%b%d", errors="coerce")
+    day = _game_day(markets)
     series = markets["series_ticker"]
     offset = series.map({s: lg.from_2026 for s, lg in LEAGUES.items()}).where(
         day >= ERA_2026, series.map({s: lg.before_2026 for s, lg in LEAGUES.items()}))
@@ -128,8 +133,9 @@ def _live(markets: pd.DataFrame, start: datetime, end: datetime,
     """Each market's ticks in [start, end) as (ticker, first_tick, stop exclusive, market:
     its row): every multiple of `every` from its listed start until its league's cap,
     while its event, mutually exclusive, shows exactly two markets (those created before
-    the tick). Also the series of each exclusive listing open in the window without a
-    registered start."""
+    the tick). Also the series of each exclusive listing without a registered start
+    whose game day (as a UTC midnight; a listing without one, its creation) is in the
+    window, so a window cut in parts counts each once."""
     step = pd.Timedelta(every)
     m = markets[markets["mutually_exclusive"].eq(True)].sort_values(
         ["event_ticker", "created_time", "ticker"], ignore_index=True)
@@ -144,8 +150,9 @@ def _live(markets: pd.DataFrame, start: datetime, end: datetime,
             ).clip(upper=pd.Timestamp(end))
     third = listing[2].dt.floor(step) + step  # a tick at the third listing still sees two
     stop = stop.where(~(stop > third), third)
-    unregistered = m.loc[begins.isna() & (m["latest_expiration_time"] >= pd.Timestamp(start)),
-                         "series_ticker"]
+    when = _game_day(m).dt.tz_localize("UTC").fillna(m["created_time"])
+    unregistered = m.loc[begins.isna() & (when >= pd.Timestamp(start))
+                         & (when < pd.Timestamp(end)), "series_ticker"]
     keep = (nth < 2) & (first < stop)
     live = pd.DataFrame({"ticker": m["ticker"], "first_tick": first, "stop": stop})[keep]
     return live.reset_index(drop=True).assign(market=lambda f: f.index), unregistered
