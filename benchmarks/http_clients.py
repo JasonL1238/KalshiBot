@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import json
 import struct
-import time
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
 
@@ -26,23 +25,22 @@ import harness
 import httpx
 
 PATTERN = harness.Pattern(200, burst_every=0.25, burst_size=10)
-BODY = json.dumps({"ticker": "KXSYN000-26OCT20-B50.5", "side": "bid", "count": "1.00",
-                   "price": "0.5600", "time_in_force": "immediate_or_cancel",
-                   "self_trade_prevention_type": "taker_at_cross",
-                   "client_order_id": "6f1c0a52-0f43-4f53-9a4d-6d0c3e0e2b7a"}).encode()
+BODY = json.dumps({**harness.ORDER, "client_order_id": "6f1c0a52-0f43-4f53-9a4d-6d0c3e0e2b7a"}
+                  ).encode()
 HEADERS = {"Content-Type": "application/json", "KALSHI-ACCESS-KEY": "bench",
            "KALSHI-ACCESS-TIMESTAMP": "1792000000000", "KALSHI-ACCESS-SIGNATURE": "x" * 88}
-POOL = 64
+POOL = 64  # connections each client may keep open
 
 
 @asynccontextmanager
-async def httpx_client(server: harness.OrderServer, http2: bool):
+async def httpx_client(server: harness.OrderServer, http2: bool = False):
+    """Yields `post(body, headers)`, which sends an order and reads the acknowledgement."""
     limits = httpx.Limits(max_connections=POOL, max_keepalive_connections=POOL,
                           keepalive_expiry=None)
     async with httpx.AsyncClient(http1=not http2, http2=http2, verify=server.ssl_context(),
                                  trust_env=False, limits=limits) as client:
-        async def post() -> bytes:
-            r = await client.post(server.url, content=BODY, headers=HEADERS)
+        async def post(body: bytes = BODY, headers: dict = HEADERS) -> bytes:
+            r = await client.post(server.url, content=body, headers=headers)
             assert r.status_code == 201 and r.http_version == ("HTTP/2" if http2 else
                                                                "HTTP/1.1"), r
             return r.content
@@ -54,35 +52,40 @@ async def aiohttp_client(server: harness.OrderServer):
     connector = aiohttp.TCPConnector(ssl=server.ssl_context(), limit=POOL,
                                      keepalive_timeout=600)
     async with aiohttp.ClientSession(connector=connector) as session:
-        async def post() -> bytes:
-            async with session.post(server.url, data=BODY, headers=HEADERS) as r:
+        async def post(body: bytes = BODY, headers: dict = HEADERS) -> bytes:
+            async with session.post(server.url, data=body, headers=headers) as r:
                 assert r.status == 201, r
                 return await r.read()
         yield post
 
 
-CLIENTS = {"httpx HTTP/1.1": lambda s: httpx_client(s, http2=False),
+CLIENTS = {"httpx HTTP/1.1": httpx_client,
            "httpx HTTP/2": lambda s: httpx_client(s, http2=True),
            "aiohttp HTTP/1.1": aiohttp_client}
 PACKAGES = ("httpx", "h2", "aiohttp", "uvloop")
 
 
 class Triggers(asyncio.Protocol):
-    """Reads the Sender's raw stream: 8 bytes of t0, then one byte per order."""
+    """Reads the Sender's raw stream: 8 bytes of t0, then one byte per order. Fails
+    `finished` if the stream ends before every order was triggered."""
 
-    def __init__(self, sink: harness.Recorder, fire):
-        self.sink, self.fire, self.buf, self.next = sink, fire, b"", 0
+    def __init__(self, sink: harness.Recorder, fire, finished: asyncio.Future):
+        self.sink, self.fire, self.finished, self.buf, self.next = sink, fire, finished, b"", 0
 
     def data_received(self, data: bytes) -> None:
         if not self.sink.t0:
             self.buf += data
             if len(self.buf) < 8:
                 return
-            self.sink.t0 = struct.unpack("!q", self.buf[:8])[0]
+            self.sink.start(struct.unpack("!q", self.buf[:8])[0])
             data = self.buf[8:]
         for _ in data:
             self.fire(self.next)
             self.next += 1
+
+    def connection_lost(self, exc) -> None:
+        if self.next < len(self.sink.offsets) and not self.finished.done():
+            self.finished.set_exception(ConnectionError(f"triggers ended at {self.next}"))
 
 
 async def warm(post, burst: int) -> None:
@@ -101,7 +104,12 @@ async def drive(make_client, server: harness.OrderServer, url: str,
         finished = loop.create_future()
 
         async def order(i: int) -> None:
-            await post()
+            try:
+                await post()
+            except Exception as e:  # fail the replay instead of hanging it
+                if not finished.done():
+                    finished.set_exception(e)
+                return
             sink.hit(i)
             if sink.done:
                 finished.set_result(None)
@@ -111,32 +119,27 @@ async def drive(make_client, server: harness.OrderServer, url: str,
             tasks.add(task)
             task.add_done_callback(tasks.discard)
 
-        u = urlparse(url)
-        start = time.process_time_ns()
-        transport, _ = await loop.create_connection(lambda: Triggers(sink, fire),
-                                                    u.hostname, u.port)
-        await finished
-        sink.cpu_ns = time.process_time_ns() - start
-        transport.close()
+        transport, _ = await loop.create_connection(
+            lambda: Triggers(sink, fire, finished), "127.0.0.1", urlparse(url).port)
+        try:
+            await asyncio.wait_for(finished, sink.offsets[-1] / 1e9 + 60)
+        finally:
+            transport.close()
 
 
-def candidate(make_client, server: harness.OrderServer, burst: int):
-    return lambda url, sink: harness.run_on(
-        "uvloop", lambda: drive(make_client, server, url, sink, burst))
-
-
-def main(n: int = 6_000, speed: float = 1.0, rounds: int = 4) -> None:
+def main(n: int = 10_000, speed: float = 1.0, rounds: int | None = None) -> None:
     harness.header("http_clients: order POSTs to a local TLS server", PACKAGES)
     pattern = PATTERN.faster(speed)
+    rounds = rounds or harness.default_rounds(len(CLIENTS))
     offsets = harness.arrivals(n // rounds, pattern)
     with harness.OrderServer() as server, harness.Steal() as steal:
-        candidates = {name: candidate(make, server, pattern.burst_size)
-                      for name, make in CLIENTS.items()}
-        lat, lag, cpu = harness.replay(candidates, [b"\x01"] * len(offsets), offsets, rounds,
-                                       websocket=False)
+        candidates = {name: harness.on_loop("uvloop", lambda url, sink, make=make: drive(
+            make, server, url, sink, pattern.burst_size)) for name, make in CLIENTS.items()}
+        result = harness.replay(candidates, [b"\x01"] * len(offsets), offsets, rounds,
+                                websocket=False)
     print(f"open-loop orders ({pattern}), {rounds} × {n // rounds:,} per client, "
           f"host CPU steal {steal}")
-    print(harness.replay_table("client", lat, lag, cpu, "(trigger lag)"))
+    print(result.table("client", "(trigger lag, per write)"))
 
 
 if __name__ == "__main__":

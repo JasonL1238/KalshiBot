@@ -1,30 +1,34 @@
 """Should the hot path freeze or disable CPython's cyclic garbage collector?
 
-Run: python benchmarks/gc_pauses.py   (stdlib only; adds the typed path if msgspec is in)
+Run: python benchmarks/gc_pauses.py   (needs kalshibot's core imports: cryptography,
+httpx, websockets; adds the typed path if msgspec is installed. On a build without
+wheels for the rest, e.g. free-threaded: PYTHONPATH=src:benchmarks)
 
-Two measurements:
-1. What one full collection costs, with a heap of long-lived containers standing in for
-   what a trading process holds (market metadata, positions, history), and what it costs
-   once `gc.freeze()` has moved that heap out of every collection.
+1. What one full collection costs with a heap of long-lived containers standing in for
+   what a trading process holds (market metadata, positions, history), and once
+   `gc.freeze()` has moved that heap out of every collection. CPython collects in full
+   once the long-lived containers have grown by a quarter since the last full
+   collection, so the script also estimates how often that comes at the replay's rate.
 2. The feed's per-message work (decode plus book update), replayed open loop with bursts
-   in this process, under each GC setting:
+   in this process, under each setting:
    - default: generational collection at the interpreter's thresholds;
    - freeze: `gc.freeze()` after setup;
    - disable: `gc.disable()` for the replay (the feed makes no cycles, so nothing leaks
      that a `gc.collect()` in a quiet moment wouldn't free).
    The paths: stdlib `json` into dicts and `kalshi.ws.BookFeed`, keeping nothing or
    keeping every message (a session tape held in memory, the worst case for the
-   collector); and, if msgspec is installed, `decode.Message` structs (gc=False: never
-   tracked) into `decode.StructFeed`, keeping every message. Settings run in interleaved
-   rounds; gc.callbacks time each collector pause.
-Runs on any CPython from 3.13, including free-threaded builds.
+   collector); and `decode.Message` structs (gc=False: never tracked) into
+   `decode.StructFeed`, keeping every message. Each replay starts right after a full
+   collection, so with a large heap no full collection fits inside one: part 1 prices
+   that risk. Settings run in interleaved rounds; gc.callbacks time each pause.
 """
 
 from __future__ import annotations
 
 import gc
 import json
-import sys
+import statistics
+import sysconfig
 import time
 from array import array
 
@@ -37,8 +41,8 @@ try:
 except ImportError:  # no msgspec: the dict paths alone
     decode = None
 
-PATTERN = harness.Pattern(1000, burst_every=0.2, burst_size=200)
-SETTINGS = ("default", "freeze", "disable")
+PATTERN = harness.PATTERNS["bursty"]
+SETTINGS = ("(harness floor)", "default", "freeze", "disable")
 
 
 def paths() -> dict[str, tuple]:
@@ -57,8 +61,12 @@ def long_lived_heap(n: int) -> list[dict]:
             for i in range(n)]
 
 
+FREE_THREADED = bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
+
+
 class Pauses:
-    """Collector pauses seen through gc.callbacks while installed."""
+    """Collector pauses seen through gc.callbacks while installed. The free-threaded
+    collector isn't generational: it reports generation 0, but every pass is full."""
 
     def __init__(self) -> None:
         self.ns, self.full, self._start = array("q"), 0, 0
@@ -68,7 +76,7 @@ class Pauses:
             self._start = time.perf_counter_ns()
         else:
             self.ns.append(time.perf_counter_ns() - self._start)
-            self.full += info["generation"] == 2
+            self.full += FREE_THREADED or info["generation"] == 2
 
     def __str__(self) -> str:
         if not self.ns:
@@ -85,7 +93,7 @@ def full_collection_ms(repeats: int = 5) -> tuple[float, float]:
             start = time.perf_counter_ns()
             gc.collect()
             times.append((time.perf_counter_ns() - start) / 1e6)
-        return sorted(times)[repeats // 2]
+        return statistics.median(times)
 
     gc.collect()
     thawed = median_ms()
@@ -95,62 +103,87 @@ def full_collection_ms(repeats: int = 5) -> tuple[float, float]:
     return thawed, frozen
 
 
-def run(setting: str, path: tuple, frames: list[bytes], offsets: list[int]
-        ) -> tuple[array, Pauses]:
+def stepper(path: tuple):
+    """A fresh feed's per-frame function, and the tape it keeps."""
     make, decoder, keeps = path
-    gc.collect()
     feed, tape = make(), []
-    if setting == "freeze":
-        gc.freeze()
-    elif setting == "disable":
-        gc.disable()
 
     def step(frame: bytes) -> None:
         msg = decoder(frame)
         feed.on_message(msg)
         if keeps:
             tape.append(msg)
+    return step, tape
 
-    pauses = Pauses()
+
+def kept_per_message(path: tuple, frames: list[bytes]) -> float:
+    """GC-tracked containers the path keeps alive per message."""
+    gc.collect()
+    before = len(gc.get_objects())
+    step, tape = stepper(path)
+    for f in frames:
+        step(f)
+    kept = len(gc.get_objects()) - before
+    del tape
+    return kept / len(frames)
+
+
+def run(setting: str, path: tuple, frames: list[bytes], offsets: list[int],
+        pauses: Pauses) -> array:
+    gc.collect()
+    step, _ = stepper(path)
+    if setting == "(harness floor)":
+        step = harness.noop
+    elif setting == "freeze":
+        gc.freeze()
+    elif setting == "disable":
+        gc.disable()
     gc.callbacks.append(pauses)
     try:
-        lat = harness.open_loop(step, frames, offsets)
+        return harness.open_loop(step, frames, offsets)
     finally:
         gc.callbacks.remove(pauses)
         gc.enable()
         gc.unfreeze()
-    return lat, pauses
 
 
 def main(n: int = 40_000, speed: float = 1.0, heaps: tuple[int, ...] = (0, 1_000_000),
-         rounds: int = 4) -> None:
+         rounds: int | None = None) -> None:
     harness.header("gc_pauses: garbage-collector settings under burst replay", ("msgspec",))
     print(f"gc thresholds {gc.get_threshold()}")
+    rounds = rounds or harness.default_rounds(len(SETTINGS))
+    pattern = PATTERN.faster(speed)
+    rate = pattern.rate + (pattern.burst_size / pattern.burst_every)
     stream = harness.Stream(n // rounds)
-    offsets = harness.arrivals(n // rounds, PATTERN.faster(speed))
+    offsets = harness.arrivals(n // rounds, pattern)
     for size in heaps:
         heap = long_lived_heap(size)  # held alive for the collector to walk
         thawed, frozen = full_collection_ms()
-        print(f"\nlong-lived heap of {size:,} dicts: one full collection takes {thawed:.1f} ms, "
-              f"{frozen:.1f} ms after gc.freeze()\n")
+        tracked = len(gc.get_objects())
+        print(f"\nlong-lived heap of {size:,} dicts ({tracked:,} tracked objects in all): one "
+              f"full collection takes {thawed:.1f} ms, {frozen:.1f} ms after gc.freeze()")
+        for name, path in paths().items():
+            kept = kept_per_message(path, stream.frames)
+            if kept >= 0.01:
+                every = tracked / 4 / (kept * rate)
+                every_s = f"{every:,.0f}" if every >= 10 else f"{every:.2f}"
+                print(f"  {name}: {kept:.1f} tracked containers kept per message, so at "
+                      f"{rate:,.0f} msgs/s a full collection about every {every_s} s")
+        print()
         for name, path in paths().items():
             lat = {s: array("q") for s in SETTINGS}
             pauses = {s: Pauses() for s in SETTINGS}
             with harness.Steal() as steal:
                 for r in range(rounds):
-                    for s in SETTINGS[r % 3:] + SETTINGS[:r % 3]:
-                        ns, p = run(s, path, stream.frames, offsets)
-                        lat[s].extend(ns)
-                        pauses[s].ns.extend(p.ns)
-                        pauses[s].full += p.full
-            print(f"{name}, {size:,}-dict heap, {PATTERN.faster(speed)}, "
-                  f"{rounds} × {n // rounds:,} frames, host CPU steal {steal}")
-            print(harness.table_head("gc setting", 12) + "   collector pauses")
+                    for s in harness.rotated(SETTINGS, r):
+                        lat[s].extend(run(s, path, stream.frames, offsets, pauses[s]))
+            print(f"{name}, {size:,}-dict heap, {pattern}, {rounds} × {n // rounds:,} frames, "
+                  f"host CPU steal {steal}")
+            print(harness.table_head("gc setting", 16) + "   collector pauses")
             for s in SETTINGS:
-                print(harness.row(s, lat[s], 12) + f"   {pauses[s]}")
+                print(harness.row(s, lat[s], 16) + f"   {pauses[s]}")
             print()
         del heap
-    sys.stdout.flush()
 
 
 if __name__ == "__main__":

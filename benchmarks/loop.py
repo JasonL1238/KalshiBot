@@ -65,52 +65,38 @@ class _Reader(asyncio.Protocol):
             self.closed.set_result(None)
 
 
-async def _connect(url: str, on_frame) -> tuple[asyncio.Transport, asyncio.Future]:
+async def _connect(url: str, on_frame) -> asyncio.Future:
+    """Open the reader; the returned future resolves when the connection closes."""
     loop = asyncio.get_running_loop()
     closed = loop.create_future()
     u = urlparse(url)
-    transport, _ = await loop.create_connection(lambda: _Reader(url, on_frame, closed),
-                                                u.hostname, u.port)
-    return transport, closed
+    await loop.create_connection(lambda: _Reader(url, on_frame, closed), u.hostname, u.port)
+    return closed
 
 
 async def callback(url: str, sink: harness.Recorder) -> None:
-    transport, closed = await _connect(url, sink.frame)
-    await closed
+    await (await _connect(url, sink.frame))
 
 
 async def queue_hop(url: str, sink: harness.Recorder) -> None:
-    queue: asyncio.Queue[bytes] = asyncio.Queue()
-    transport, closed = await _connect(url, queue.put_nowait)
+    queue: asyncio.Queue[bytes | None] = asyncio.Queue()
+    closed = await _connect(url, queue.put_nowait)
+    closed.add_done_callback(lambda _: queue.put_nowait(None))  # wakes a waiting consumer
     while not sink.done:
-        sink.frame(await queue.get())
+        if (frame := await queue.get()) is None:
+            raise ConnectionError(f"replay closed after {sink.i} frames")
+        sink.frame(frame)
     await closed
 
 
 CONSUMERS = {"callback": callback, "queue hop": queue_hop}
-LOOPS = ("asyncio", "uvloop")
-PATTERNS = {"steady": harness.Pattern(2000),
-            "bursty": harness.Pattern(1000, burst_every=0.2, burst_size=200)}
 
 
-def candidate(loop: str, consumer):
-    return lambda url, sink: harness.run_on(loop, lambda: consumer(url, sink))
-
-
-def main(n: int = 40_000, speed: float = 1.0, rounds: int = 4) -> None:
+def main(n: int = 40_000, speed: float = 1.0, rounds: int | None = None) -> None:
     harness.header("loop: asyncio vs uvloop under a local WebSocket replay", ("uvloop",))
-    stream = harness.Stream(n // rounds)
-    candidates = {f"{loop} / {name}": candidate(loop, consumer)
-                  for loop in LOOPS for name, consumer in CONSUMERS.items()}
-    for label, pattern in PATTERNS.items():
-        pattern = pattern.faster(speed)
-        offsets = harness.arrivals(n // rounds, pattern)
-        with harness.Steal() as steal:
-            lat, lag, cpu = harness.replay(candidates, stream.frames, offsets, rounds)
-        print(f"open-loop replay, {label} ({pattern}), {rounds} × {n // rounds:,} frames "
-              f"per candidate, host CPU steal {steal}")
-        print(harness.replay_table("loop / consumer", lat, lag, cpu))
-        print()
+    candidates = {f"{loop} / {name}": harness.on_loop(loop, consumer)
+                  for loop in ("asyncio", "uvloop") for name, consumer in CONSUMERS.items()}
+    harness.report_ws_replays("loop / consumer", candidates, n, speed, rounds)
 
 
 if __name__ == "__main__":

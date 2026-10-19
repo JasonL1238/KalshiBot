@@ -1,22 +1,14 @@
-"""Shared pieces of the M4 execution benchmarks (docs/EXECUTION.md).
-
-- `header()`: the platform line every script prints first.
-- `PATTERNS`, `arrivals()`: open-loop arrival schedules, with and without bursts.
-- `open_loop()`: replays a schedule against a function in this process.
-- `Stream`: synthetic Kalshi WebSocket frames (snapshot, delta, trade, fill).
-- `Sender`: a separate process that writes frames to one TCP connection on a schedule,
-  optionally after a WebSocket handshake, so network replays are open loop too.
-- `OrderServer`: a local TLS order endpoint (HTTP/1.1 and HTTP/2) in its own process.
-
-Every latency is measured from the item's *intended* time on the schedule, never from
-when the code under test got to it. A slow item therefore delays, and is charged to,
-every item queued behind it, which closed-loop timing hides (coordinated omission).
+"""Shared pieces of the M4 execution benchmarks: schedules, open-loop timing, synthetic
+Kalshi frames, a replay sender, and a local order server. The method they implement
+(open loop, coordinated-omission correction, interleaved rounds, host noise) is in
+docs/EXECUTION.md.
 
 Nothing here talks to Kalshi. Keys are generated per run, and every socket is loopback.
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import importlib.metadata
@@ -40,15 +32,21 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from kalshibot.kalshi.models import PRICE_SCALE
+
 clock = time.monotonic_ns  # CLOCK_MONOTONIC: one time base across processes
 
 PRICE_GRID = 100  # 1 cent, in price units
 ORDER_PATH = "/trade-api/v2/portfolio/events/orders"
+ORDER = {"ticker": "KXSYN000-26OCT20-B50.5", "side": "bid", "count": "1.00",
+         "price": "0.5600", "time_in_force": "immediate_or_cancel",
+         "self_trade_prevention_type": "taker_at_cross"}  # a V2 order body (RESEARCH §1)
+VERIFY = False  # tests set this: replays then check every payload against the frame sent
 
 
 # ---- platform -------------------------------------------------------------------------
 
-def cpu_model() -> str:
+def _cpu_model() -> str:
     if sys.platform == "darwin":
         return subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"],
                               capture_output=True, text=True).stdout.strip()
@@ -61,37 +59,44 @@ def cpu_model() -> str:
     return platform.processor() or platform.machine()
 
 
-def header(title: str, packages: Sequence[str] = ()) -> None:
-    gil = getattr(sys, "_is_gil_enabled", lambda: True)()
-    print(title)
-    print(f"platform: {platform.platform()}, {cpu_model()}, {os.cpu_count()} CPUs")
-    print(f"python: {platform.python_implementation()} {platform.python_version()}"
-          f"{'' if gil else ' (free-threaded, GIL off)'}")
-    if packages:
-        print("packages: " + ", ".join(f"{p} {version(p)}" for p in packages))
-    print()
-
-
-def version(package: str) -> str:
+def _version(package: str) -> str:
     try:
         return importlib.metadata.version(package)
     except importlib.metadata.PackageNotFoundError:
         return "missing"
 
 
-def pin(cpu: int) -> set[int] | None:
-    """Pin this process to one CPU where the OS allows it (Linux), to keep the sender,
-    server, and client off each other's cores. Returns the previous CPU set."""
-    if not hasattr(os, "sched_setaffinity") or (os.cpu_count() or 1) <= cpu:
+# CPUs for the replay's processes, kept apart where the OS can pin (Linux, 3+ CPUs).
+_ALLOWED = sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else []
+CPUS = (dict(zip(("sender", "client", "server"), _ALLOWED[:3], strict=True))
+        if len(_ALLOWED) >= 3 else {})
+
+
+def header(title: str, packages: Sequence[str] = ()) -> None:
+    gil = getattr(sys, "_is_gil_enabled", lambda: True)()
+    print(title)
+    print(f"platform: {platform.platform()}, {_cpu_model()}, {os.cpu_count()} CPUs")
+    print(f"python: {platform.python_implementation()} {platform.python_version()}"
+          f"{'' if gil else ' (free-threaded, GIL off)'}")
+    if packages:
+        print("packages: " + ", ".join(f"{p} {_version(p)}" for p in packages))
+    print("replay processes pinned to CPUs " + ", ".join(f"{k} {v}" for k, v in CPUS.items())
+          if CPUS else "replay processes not pinned (needs Linux and 3 CPUs)")
+    print()
+
+
+def _pin(role: str) -> set[int] | None:
+    """Pin this process to its role's CPU, if any; returns the previous CPU set."""
+    if role not in CPUS:
         return None
     before = os.sched_getaffinity(0)
-    os.sched_setaffinity(0, {cpu})
+    os.sched_setaffinity(0, {CPUS[role]})
     return before
 
 
 @contextmanager
-def pinned(cpu: int):
-    before = pin(cpu)
+def _pinned(role: str):
+    before = _pin(role)
     try:
         yield
     finally:
@@ -99,7 +104,7 @@ def pinned(cpu: int):
             os.sched_setaffinity(0, before)
 
 
-# ---- schedules and percentiles ----------------------------------------------------------
+# ---- schedules, percentiles, rounds ------------------------------------------------------
 
 @dataclass(frozen=True)
 class Pattern:
@@ -108,13 +113,17 @@ class Pattern:
     burst_size: int = 0  # items that arrive at the same instant in each burst
 
     def faster(self, factor: float) -> Pattern:
-        """The same shape compressed in time (used by the tests to run quickly)."""
+        """The same shape compressed in time."""
         return Pattern(self.rate * factor, self.burst_every / factor, self.burst_size)
 
     def __str__(self) -> str:
         bursts = (f" + {self.burst_size} at once every {self.burst_every * 1000:g} ms"
                   if self.burst_every else "")
         return f"Poisson {self.rate:g}/s{bursts}"
+
+
+# The feed's schedules: the same mean rate, steady or with 40% of frames in bursts.
+PATTERNS = {"steady": Pattern(2000), "bursty": Pattern(1000, burst_every=0.2, burst_size=200)}
 
 
 def arrivals(n: int, pattern: Pattern, seed: int = 1) -> list[int]:
@@ -143,14 +152,32 @@ def quantiles(ns: Sequence[int]) -> dict[str, float]:
     return {"p50": q(0.5), "p99": q(0.99), "p99.9": q(0.999), "max": s[-1] / 1000}
 
 
-def row(name: str, ns: Sequence[int], width: int = 34) -> str:
-    qs = quantiles(ns)
-    return f"{name:<{width}}" + "".join(f"{v:>11.1f}" for v in qs.values())
-
-
 def table_head(first: str, width: int = 34) -> str:
-    return f"{first:<{width}}" + "".join(f"{k:>11}" for k in ("p50 µs", "p99", "p99.9", "max"))
+    return f"{first:<{width}}{'n':>8}" + "".join(
+        f"{k:>11}" for k in ("p50 µs", "p99", "p99.9", "max"))
 
+
+def row(name: str, ns: Sequence[int], width: int = 34) -> str:
+    """A table row. A percentile needs 10 samples beyond it, else it prints as —."""
+    qs, n = quantiles(ns), len(ns)
+    shown = [qs["p50"], qs["p99"] if n >= 1000 else math.nan,
+             qs["p99.9"] if n >= 10_000 else math.nan, qs["max"]]
+    return f"{name:<{width}}{n:>8,}" + "".join(
+        f"{'—':>11}" if math.isnan(v) else f"{v:>11.1f}" for v in shown)
+
+
+def default_rounds(candidates: int) -> int:
+    """At least 4 rounds, and a multiple of the candidates so that rotating the order puts
+    each first equally often."""
+    return candidates * math.ceil(4 / candidates)
+
+
+def rotated(names: Sequence[str], r: int) -> list[str]:
+    k = r % len(names)
+    return [*names[k:], *names[:k]]
+
+
+# ---- in-process timing -------------------------------------------------------------------
 
 def open_loop(fn: Callable, items: Sequence, offsets: Sequence[int]) -> array:
     """Run `fn(item)` for each item at its scheduled offset (ns), spinning between items.
@@ -168,6 +195,28 @@ def open_loop(fn: Callable, items: Sequence, offsets: Sequence[int]) -> array:
     return lat
 
 
+def noop(_) -> None:
+    """The harness floor: `open_loop` of this measures the measurement (and host noise)."""
+
+
+def compare(candidates: dict[str, Callable], items: Sequence, offsets: Sequence[int],
+            rounds: int | None = None) -> dict[str, array]:
+    """Open-loop latencies per candidate, pooled over interleaved rounds that each replay
+    an equal slice of the schedule, after one untimed warm-up pass per candidate."""
+    names, rounds = list(candidates), rounds or default_rounds(len(candidates))
+    for fn in candidates.values():
+        for item in items[:1000]:
+            fn(item)
+    out = {name: array("q") for name in names}
+    per = len(offsets) // rounds
+    for r in range(rounds):
+        part, base = items[r * per:(r + 1) * per], offsets[r * per]
+        times = [o - base for o in offsets[r * per:(r + 1) * per]]
+        for name in rotated(names, r):
+            out[name].extend(open_loop(candidates[name], part, times))
+    return out
+
+
 def per_call_ns(candidates: dict[str, Callable], items: Sequence, repeats: int = 7,
                 ) -> dict[str, float]:
     """Mean ns per call over `items`, the median of `repeats` batches, with candidates
@@ -182,28 +231,9 @@ def per_call_ns(candidates: dict[str, Callable], items: Sequence, repeats: int =
     return {name: statistics.median(t) for name, t in times.items()}
 
 
-def noop(_) -> None:
-    """The harness floor: `open_loop` of this measures the measurement (and host noise)."""
-
-
-def compare(candidates: dict[str, Callable], items: Sequence, offsets: Sequence[int],
-            rounds: int = 4) -> dict[str, array]:
-    """Open-loop latencies per candidate, pooled over `rounds` interleaved runs of an equal
-    slice of the schedule, so a noisy stretch of the host hits every candidate alike."""
-    out = {name: array("q") for name in candidates}
-    per = len(offsets) // rounds
-    for r in range(rounds):
-        part, base = items[r * per:(r + 1) * per], offsets[r * per]
-        times = [o - base for o in offsets[r * per:(r + 1) * per]]
-        names = list(candidates)
-        for name in names[r % len(names):] + names[:r % len(names)]:
-            out[name].extend(open_loop(candidates[name], part, times))
-    return out
-
-
 class Steal:
     """The share of CPU time the hypervisor took from this VM while the block ran (Linux
-    /proc/stat `steal`; None elsewhere). Tails on a host that steals are the host's."""
+    /proc/stat `steal`; n/a elsewhere). Tails on a host that steals are partly the host's."""
 
     def __init__(self):
         self.share: float | None = None
@@ -231,8 +261,9 @@ class Steal:
 
 # ---- synthetic Kalshi frames -------------------------------------------------------------
 
-def _price(units: int) -> str:
-    return f"{units // 10_000}.{units % 10_000:04d}"
+def dollars(units: int) -> str:
+    """Price units as Kalshi's dollar string: 5600 -> "0.5600"."""
+    return f"{units // PRICE_SCALE}.{units % PRICE_SCALE:04d}"
 
 
 def _size(units: int) -> str:
@@ -265,13 +296,13 @@ class _Market:
 
     def top(self, side: str) -> int:
         """The highest price a new bid on `side` may take without crossing."""
-        return (self.fair if side == "yes" else 10_000 - self.fair) - PRICE_GRID
+        return (self.fair if side == "yes" else PRICE_SCALE - self.fair) - PRICE_GRID
 
     def snapshot(self) -> dict:
         body = {"market_ticker": self.ticker}
         for side, levels in self.sides.items():
             if levels:
-                body[f"{side}_dollars_fp"] = [[_price(p), _size(s)]
+                body[f"{side}_dollars_fp"] = [[dollars(p), _size(s)]
                                               for p, s in sorted(levels.items())]
         return body
 
@@ -300,9 +331,9 @@ class _Market:
             return [("orderbook_delta", self.take(side, price, size, ts_ms))]
         best = max(levels)  # a trade: the taker sells into `side`'s best bid
         size = levels[best] if rng.random() < 0.4 else rng.randint(1, levels[best])
-        yes = best if side == "yes" else 10_000 - best
+        yes = best if side == "yes" else PRICE_SCALE - best
         trade = {"trade_id": _uuid(rng), "market_ticker": self.ticker,
-                 "yes_price_dollars": _price(yes), "no_price_dollars": _price(10_000 - yes),
+                 "yes_price_dollars": dollars(yes), "no_price_dollars": dollars(PRICE_SCALE - yes),
                  "count_fp": _size(size), "taker_side": "no" if side == "yes" else "yes",
                  "ts": ts_ms // 1000}
         return [("trade", trade), ("orderbook_delta", self.take(side, best, size, ts_ms))]
@@ -315,14 +346,16 @@ class _Market:
         return self.delta(price, -size, side, ts_ms)
 
     def delta(self, price: int, size: int, side: str, ts_ms: int) -> dict:
-        return {"market_ticker": self.ticker, "price_dollars": _price(price),
+        return {"market_ticker": self.ticker, "price_dollars": dollars(price),
                 "delta_fp": _size(size), "side": side, "ts_ms": ts_ms}
 
 
 class Stream:
     """A replayable WebSocket session in Kalshi's formats (docs/RESEARCH.md §1): snapshots
     for every market, then book deltas, the trades that cause some of them, and our own
-    fills. Books start 10-100 levels deep per side. Frames are compact JSON bytes."""
+    fills. Books start 5-100 levels deep per side. Book messages carry a contiguous `seq`
+    per subscription; trades and fills carry none, the case a decoder must accept. Frames
+    are compact JSON bytes."""
 
     SIDS = {"orderbook_snapshot": 1, "orderbook_delta": 1, "trade": 2, "fill": 3}
 
@@ -330,21 +363,23 @@ class Stream:
         rng = random.Random(seed)
         self.markets = [_Market(rng, f"KXSYN{i:03d}-26OCT20-B{50 + i}.5",
                                 rng.randint(10, depth)) for i in range(markets)]
-        seq = dict.fromkeys(self.SIDS.values(), 0)
+        seq = 0
         ts_ms, self.messages = 1_792_000_000_000, []
 
         def emit(kind: str, body: dict) -> None:
-            sid = self.SIDS[kind]
-            seq[sid] += 1
-            self.messages.append({"type": kind, "sid": sid, "seq": seq[sid], "msg": body})
+            nonlocal seq
+            msg = {"type": kind, "sid": self.SIDS[kind]}
+            if kind.startswith("orderbook"):
+                seq += 1
+                msg["seq"] = seq
+            self.messages.append({**msg, "msg": body})
 
         for m in self.markets:
             emit("orderbook_snapshot", m.snapshot())
         while len(self.messages) < n:
             ts_ms += rng.randint(0, 3)
             if rng.random() < 0.01:
-                m = rng.choice(self.markets)
-                emit("fill", self.fill(rng, m, ts_ms))
+                emit("fill", self.fill(rng, rng.choice(self.markets), ts_ms))
                 continue
             for kind, body in rng.choice(self.markets).step(ts_ms):
                 emit(kind, body)
@@ -356,13 +391,46 @@ class Stream:
         size = m.lot()
         return {"trade_id": _uuid(rng), "order_id": _uuid(rng), "market_ticker": m.ticker,
                 "is_taker": rng.random() < 0.5, "side": rng.choice(("yes", "no")),
-                "yes_price_dollars": _price(m.fair), "count_fp": _size(size),
+                "yes_price_dollars": dollars(m.fair), "count_fp": _size(size),
                 "fee_cost": "0.0700", "action": rng.choice(("buy", "sell")), "ts": ts_ms // 1000,
                 "client_order_id": _uuid(rng), "post_position_fp": _size(size),
                 "purchased_side": "yes"}
 
 
-def ws_frame(payload: bytes, opcode: int = 0x1) -> bytes:
+# ---- helper processes ----------------------------------------------------------------------
+
+class _Child:
+    """A helper process on a pipe. It reports a port when ready and stops on "stop"."""
+
+    def __init__(self, target: Callable, *args):
+        ctx = multiprocessing.get_context("spawn")
+        self._pipe, child = ctx.Pipe()
+        self._proc = ctx.Process(target=target, args=(child, *args), daemon=True)
+        self._proc.start()
+        self.port = self._recv()
+
+    def _recv(self, timeout: float = 120):
+        """The child's next message; an error if it died or hung instead."""
+        deadline = time.monotonic() + timeout
+        while not self._pipe.poll(0.1):
+            if not self._proc.is_alive() or time.monotonic() > deadline:
+                raise RuntimeError(f"{self._proc.name} exited ({self._proc.exitcode}) or hung")
+        return self._pipe.recv()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> None:
+        try:
+            self._pipe.send("stop")
+        except OSError:  # the child is already gone
+            pass
+        self._proc.join(5)
+        if self._proc.is_alive():
+            self._proc.kill()
+
+
+def _ws_frame(payload: bytes, opcode: int = 0x1) -> bytes:
     """An unmasked server-to-client WebSocket frame."""
     n = len(payload)
     if n < 126:
@@ -374,21 +442,14 @@ def ws_frame(payload: bytes, opcode: int = 0x1) -> bytes:
     return head + payload
 
 
-# ---- the replay sender -------------------------------------------------------------------
-
-def _recv_until(sock: socket.socket, end: bytes) -> bytes:
-    data = b""
-    while end not in data:
+def _accept_websocket(sock: socket.socket) -> None:
+    request = b""
+    while b"\r\n\r\n" not in request:
         chunk = sock.recv(4096)
         if not chunk:
             raise ConnectionError("peer closed during the handshake")
-        data += chunk
-    return data
-
-
-def _accept_websocket(sock: socket.socket) -> None:
-    request = _recv_until(sock, b"\r\n\r\n").decode("latin-1")
-    key = next(line.split(":", 1)[1].strip() for line in request.split("\r\n")
+        request += chunk
+    key = next(line.split(":", 1)[1].strip() for line in request.decode("latin-1").split("\r\n")
                if line.lower().startswith("sec-websocket-key:"))
     accept = base64.b64encode(hashlib.sha1(
         (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
@@ -396,27 +457,25 @@ def _accept_websocket(sock: socket.socket) -> None:
                   f"Connection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").encode())
 
 
-def _send(pipe, frames: list[bytes], offsets: list[int], websocket: bool, cpu: int) -> None:
-    pin(cpu)
+def _send(pipe, frames: list[bytes], offsets: list[int], websocket: bool) -> None:
+    _pin("sender")
     server = socket.create_server(("127.0.0.1", 0))
     pipe.send(server.getsockname()[1])
-    while True:  # one replay per accepted connection, until the parent says stop
-        if not pipe.poll(None) or pipe.recv() != "go":
-            return
+    wire = [_ws_frame(f) for f in frames] if websocket else frames
+    while (msg := pipe.recv()) != "stop":  # ("go", limit): one replay per connection
+        limit = msg[1]
         sock, _ = server.accept()
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         if websocket:
             _accept_websocket(sock)
-        wire = [ws_frame(f) for f in frames] if websocket else frames
-        groups: list[tuple[int, bytes]] = []
-        for off, data in zip(offsets, wire, strict=True):
+        groups: list[tuple[int, bytes]] = []  # a burst goes out in one write
+        for off, data in zip(offsets[:limit], wire[:limit], strict=True):
             if groups and groups[-1][0] == off:
                 groups[-1] = (off, groups[-1][1] + data)
             else:
                 groups.append((off, data))
-        t0 = clock() + 300_000_000
-        start = str(t0).encode()
-        sock.sendall(ws_frame(start) if websocket else struct.pack("!q", t0))
+        t0 = clock() + 100_000_000  # time for the client to finish connecting
+        sock.sendall(_ws_frame(str(t0).encode()) if websocket else struct.pack("!q", t0))
         lags = array("q")
         for off, data in groups:
             due = t0 + off
@@ -424,10 +483,11 @@ def _send(pipe, frames: list[bytes], offsets: list[int], websocket: bool, cpu: i
                 pass
             sock.sendall(data)
             lags.append(clock() - due)
-        if websocket:
-            sock.sendall(ws_frame(struct.pack("!H", 1000), opcode=0x8))
-        sock.settimeout(5)
-        try:
+        try:  # end the stream, so the client needn't time out; it may have gone already
+            if websocket:
+                sock.sendall(_ws_frame(struct.pack("!H", 1000), opcode=0x8))
+            sock.shutdown(socket.SHUT_WR)
+            sock.settimeout(5)
             while sock.recv(65536):
                 pass
         except OSError:
@@ -436,119 +496,135 @@ def _send(pipe, frames: list[bytes], offsets: list[int], websocket: bool, cpu: i
         pipe.send(lags.tobytes())
 
 
-def _recv(pipe, proc, timeout: float = 120):
-    """The next message from a child process, or an error if it died or hung."""
-    deadline = time.monotonic() + timeout
-    while not pipe.poll(0.1):
-        if not proc.is_alive() or time.monotonic() > deadline:
-            raise RuntimeError(f"{proc.name} exited ({proc.exitcode}) or hung")
-    return pipe.recv()
-
-
-class Sender:
+class Sender(_Child):
     """A process that replays `frames` at `offsets` to each client that connects, as
     WebSocket text frames or raw bytes. The first frame (or 8 raw bytes) carries t0, the
-    schedule's start on `clock()`. Bursts go out in one write. Use as a context manager;
-    call `replay()` before each client connects and `lag()` after it is done."""
+    schedule's start on `clock()`; then the frames go out, bursts in one write, and the
+    stream ends (a close frame, then EOF). Call `replay()` before each client connects
+    and `lag()` once it is done."""
 
-    def __init__(self, frames: list[bytes], offsets: list[int], websocket: bool = True,
-                 cpu: int = 0):
-        ctx = multiprocessing.get_context("spawn")
-        self._pipe, child = ctx.Pipe()
-        self._proc = ctx.Process(target=_send, args=(child, frames, offsets, websocket, cpu),
-                                 daemon=True)
-        self._proc.start()
-        self.port = _recv(self._pipe, self._proc)
+    def __init__(self, frames: list[bytes], offsets: list[int], websocket: bool = True):
+        super().__init__(_send, frames, offsets, websocket)
         self.url = f"ws://127.0.0.1:{self.port}/"
 
-    def replay(self) -> None:
-        self._pipe.send("go")
+    def replay(self, limit: int | None = None) -> None:
+        """Serve the next connection the first `limit` frames (all if None)."""
+        self._pipe.send(("go", limit))
 
     def lag(self) -> array:
         """How late each write finished against its schedule (ns): the sender's own share."""
         out = array("q")
-        out.frombytes(_recv(self._pipe, self._proc))
+        out.frombytes(self._recv())
         return out
-
-    def __enter__(self) -> Sender:
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self._pipe.send("stop")
-        self._proc.join(5)
-        if self._proc.is_alive():
-            self._proc.kill()
 
 
 class Recorder:
     """Client side of a replay. The first message carries t0; item i is then charged from
     t0 + offsets[i]. `frame(payload)` stamps messages that are done when they arrive, in
-    order; `hit(i)` stamps item i whenever it finishes (an order's response, say)."""
+    order; `hit(i)` stamps item i whenever it finishes (an order's response, say).
+    `cpu_ns` is the client's CPU time from t0 to the last item. With `expected` frames,
+    each payload must match its frame."""
 
-    def __init__(self, offsets: Sequence[int]):
-        self.offsets, self.t0, self.i = offsets, 0, 0
+    def __init__(self, offsets: Sequence[int], expected: Sequence[bytes] | None = None):
+        self.offsets, self.expected, self.t0, self.i, self.cpu_ns = offsets, expected, 0, 0, 0
         self.lat = array("q", bytes(8 * len(offsets)))
-        self.cpu_ns = 0  # the client's CPU time for the replay, if it measures its own
 
     @property
     def done(self) -> bool:
         return self.i == len(self.offsets)
 
+    def start(self, t0: int) -> None:
+        self.t0, self._cpu = t0, time.process_time_ns()
+
     def frame(self, payload: bytes | str) -> None:
         now = clock()
         if not self.t0:
-            self.t0 = int(payload)
+            self.start(int(payload))
             return
+        if self.expected is not None:
+            got = payload.encode() if isinstance(payload, str) else bytes(payload)
+            assert got == self.expected[self.i], f"frame {self.i} arrived altered"
         self.lat[self.i] = now - self.t0 - self.offsets[self.i]
-        self.i += 1
+        self._next()
 
     def hit(self, i: int) -> None:
         self.lat[i] = clock() - self.t0 - self.offsets[i]
+        self._next()
+
+    def _next(self) -> None:
         self.i += 1
+        if self.done:
+            self.cpu_ns = time.process_time_ns() - self._cpu
 
 
 def run_on(loop: str, main: Callable[[], Awaitable]):
     """Run `main()` to completion on a new event loop: "asyncio" (stdlib) or "uvloop"."""
     if loop == "uvloop":
-        import uvloop
+        import uvloop  # the [bench] extra; gc_pauses runs without it
         return uvloop.run(main())
-    import asyncio
     return asyncio.run(main())
 
 
+def on_loop(loop: str, consumer: Callable[[str, Recorder], Awaitable]):
+    """A `replay` candidate that runs `consumer(url, recorder)` on `loop`."""
+    return lambda url, sink: run_on(loop, lambda: consumer(url, sink))
+
+
+@dataclass
+class Replay:
+    lat: dict[str, array]  # per candidate, ns from each item's scheduled time
+    cpu: dict[str, float]  # per candidate, client CPU µs per item
+    lag: array  # the sender's lateness per write (ns), over every round
+
+    def table(self, first: str, lag_name: str = "(sender lag, per write)") -> str:
+        lines = [table_head(first) + f"{'CPU µs/item':>13}", row(lag_name, self.lag)]
+        lines += [row(name, ns) + f"{self.cpu[name]:>13.1f}" for name, ns in self.lat.items()]
+        return "\n".join(lines)
+
+
 def replay(candidates: dict[str, Callable[[str, Recorder], None]], frames: list[bytes],
-           offsets: list[int], rounds: int = 4, websocket: bool = True,
-           ) -> tuple[dict[str, array], array, dict[str, float]]:
-    """Each candidate connects to a `Sender` and consumes one replay of `frames`, `rounds`
-    times in rotating order; latencies are pooled per candidate. Also returns the sender's
-    own lag, and each candidate's CPU µs per item (its process time over the replay, or
-    what it put in `Recorder.cpu_ns`). The client runs pinned to CPU 1, the sender to 0."""
-    out, lags, names = {name: array("q") for name in candidates}, array("q"), list(candidates)
-    cpu = dict.fromkeys(candidates, 0)
-    with pinned(1), Sender(frames, offsets, websocket) as sender:
-        for r in range(rounds):
-            for name in names[r % len(names):] + names[:r % len(names)]:
-                rec = Recorder(offsets)
-                sender.replay()
-                start = time.process_time_ns()
+           offsets: list[int], rounds: int | None = None, websocket: bool = True) -> Replay:
+    """Each candidate connects to a `Sender` and consumes a replay of `frames` at
+    `offsets`: once untimed as warm-up (the first 1,000 frames), then `rounds` times in
+    rotating order, pooled. The client side runs pinned apart from the sender."""
+    names, rounds = list(candidates), rounds or default_rounds(len(candidates))
+    lat, cpu, lags = {name: array("q") for name in names}, dict.fromkeys(names, 0), array("q")
+    warmup = min(1000, len(offsets))
+    with _pinned("client"), Sender(frames, offsets, websocket) as sender:
+        for r in range(-1, rounds):
+            for name in rotated(names, max(r, 0)):
+                rec = Recorder(offsets[:warmup] if r < 0 else offsets,
+                               frames if VERIFY and websocket else None)
+                sender.replay(warmup if r < 0 else None)
                 candidates[name](sender.url, rec)
-                cpu[name] += rec.cpu_ns or time.process_time_ns() - start
-                assert rec.done, f"{name} stopped after {rec.i} of {len(offsets)} items"
-                out[name].extend(rec.lat)
-                lags.extend(sender.lag())
-    return out, lags, {name: ns / 1000 / len(out[name]) for name, ns in cpu.items()}
+                assert rec.done, f"{name} stopped after {rec.i} of {len(rec.offsets)} items"
+                lag = sender.lag()
+                if r >= 0:
+                    lat[name].extend(rec.lat)
+                    cpu[name] += rec.cpu_ns
+                    lags.extend(lag)
+    return Replay(lat, {name: ns / 1000 / len(lat[name]) for name, ns in cpu.items()}, lags)
 
 
-def replay_table(first: str, lat: dict[str, array], lag: array, cpu: dict[str, float],
-                 lag_name: str = "(sender lag)") -> str:
-    lines = [table_head(first) + f"{'CPU µs/item':>13}", row(lag_name, lag)]
-    lines += [row(name, ns) + f"{cpu[name]:>13.1f}" for name, ns in lat.items()]
-    return "\n".join(lines)
+def report_ws_replays(first: str, candidates: dict[str, Callable], n: int, speed: float,
+                      rounds: int | None = None) -> None:
+    """Replay a synthetic stream to WebSocket candidates under each of `PATTERNS`."""
+    rounds = rounds or default_rounds(len(candidates))
+    stream = Stream(n // rounds)
+    for label, pattern in PATTERNS.items():
+        pattern = pattern.faster(speed)
+        offsets = arrivals(n // rounds, pattern)
+        with Steal() as steal:
+            result = replay(candidates, stream.frames, offsets, rounds)
+        print(f"open-loop replay, {label} ({pattern}), {rounds} × {n // rounds:,} frames "
+              f"each, host CPU steal {steal}")
+        print(result.table(first))
+        print()
 
 
 # ---- a local TLS order endpoint ------------------------------------------------------------
 
-def self_signed(directory: Path) -> tuple[Path, Path]:
+def _self_signed(directory: Path) -> tuple[Path, Path]:
     """A throwaway certificate for 127.0.0.1 (never a real key)."""
     import datetime
     import ipaddress
@@ -577,81 +653,75 @@ def self_signed(directory: Path) -> tuple[Path, Path]:
 
 
 ORDER_ACK = json.dumps({"order": {
-    "order_id": "00000000-0000-0000-0000-000000000000", "client_order_id": "x",
-    "ticker": "KXSYN000-26OCT20-B50.5", "side": "bid", "status": "executed",
-    "count": "1.00", "price": "0.5600", "fill_count": "1.00", "remaining_count": "0.00",
-    "time_in_force": "immediate_or_cancel", "ts_ms": 1792000000000}}).encode()
+    **ORDER, "order_id": "00000000-0000-0000-0000-000000000000", "client_order_id": "x",
+    "status": "executed", "fill_count": "1.00", "remaining_count": "0.00",
+    "ts_ms": 1792000000000}}).encode()
 
 
-class _OrderProtocol:
-    """Answers every request on one TLS connection with `ORDER_ACK` (201): HTTP/2 when ALPN
-    picked it (the `h2` state machine), else HTTP/1.1 with keep-alive and pipelining."""
+def _order_protocol() -> type[asyncio.Protocol]:
+    """The order server's protocol (imports h2, which only the server process needs).
+    Answers every request on a TLS connection with `ORDER_ACK` (201): HTTP/2 when ALPN
+    picked it, else HTTP/1.1 with keep-alive and pipelining."""
+    from h2.config import H2Configuration
+    from h2.connection import H2Connection
+    from h2.events import DataReceived, StreamEnded
 
-    H1_ACK = (b"HTTP/1.1 201 Created\r\nContent-Type: application/json\r\n"
+    h1_ack = (b"HTTP/1.1 201 Created\r\nContent-Type: application/json\r\n"
               b"Content-Length: %d\r\n\r\n" % len(ORDER_ACK)) + ORDER_ACK
+    h2_headers = [(":status", "201"), ("content-type", "application/json"),
+                  ("content-length", str(len(ORDER_ACK)))]
 
-    def connection_made(self, transport) -> None:
-        self.transport, self.buf = transport, b""
-        self.h2 = None
-        if transport.get_extra_info("ssl_object").selected_alpn_protocol() == "h2":
-            from h2.config import H2Configuration
-            from h2.connection import H2Connection
-            self.h2 = H2Connection(H2Configuration(client_side=False, header_encoding=None))
-            self.h2.initiate_connection()
-            transport.write(self.h2.data_to_send())
+    class OrderProtocol(asyncio.Protocol):
+        def connection_made(self, transport) -> None:
+            self.transport, self.buf, self.h2 = transport, b"", None
+            if transport.get_extra_info("ssl_object").selected_alpn_protocol() == "h2":
+                self.h2 = H2Connection(H2Configuration(client_side=False, header_encoding=None))
+                self.h2.initiate_connection()
+                transport.write(self.h2.data_to_send())
 
-    def data_received(self, data: bytes) -> None:
-        if self.h2 is None:
-            self._h1(data)
-            return
-        from h2.events import DataReceived, StreamEnded
-        conn = self.h2
-        for event in conn.receive_data(data):
-            if isinstance(event, DataReceived):
-                conn.acknowledge_received_data(event.flow_controlled_length, event.stream_id)
-            elif isinstance(event, StreamEnded):
-                conn.send_headers(event.stream_id, [(":status", "201"),
-                                                    ("content-type", "application/json"),
-                                                    ("content-length", str(len(ORDER_ACK)))])
-                conn.send_data(event.stream_id, ORDER_ACK, end_stream=True)
-        self.transport.write(conn.data_to_send())
+        def data_received(self, data: bytes) -> None:
+            if self.h2 is None:
+                self.h1(data)
+                return
+            for event in self.h2.receive_data(data):
+                if isinstance(event, DataReceived):
+                    self.h2.acknowledge_received_data(event.flow_controlled_length,
+                                                      event.stream_id)
+                elif isinstance(event, StreamEnded):
+                    self.h2.send_headers(event.stream_id, h2_headers)
+                    self.h2.send_data(event.stream_id, ORDER_ACK, end_stream=True)
+            self.transport.write(self.h2.data_to_send())
 
-    def _h1(self, data: bytes) -> None:
-        buf, out = self.buf + data, []
-        while (end := buf.find(b"\r\n\r\n")) >= 0:
-            head = buf[:end].lower()
-            at = head.find(b"content-length:")
-            length = int(head[at + 15:].split(b"\r\n", 1)[0]) if at >= 0 else 0
-            if len(buf) < end + 4 + length:
-                break
-            buf = buf[end + 4 + length:]
-            out.append(self.H1_ACK)
-        self.buf = buf
-        if out:
-            self.transport.write(b"".join(out))
+        def h1(self, data: bytes) -> None:
+            buf, acks = self.buf + data, 0
+            while (end := buf.find(b"\r\n\r\n")) >= 0:
+                head = buf[:end].lower()
+                at = head.find(b"content-length:")
+                length = int(head[at + 15:].split(b"\r\n", 1)[0]) if at >= 0 else 0
+                if len(buf) < end + 4 + length:
+                    break
+                buf, acks = buf[end + 4 + length:], acks + 1
+            self.buf = buf
+            if acks:
+                self.transport.write(h1_ack * acks)
 
-    def connection_lost(self, exc) -> None:
-        pass
-
-    def eof_received(self) -> None:
-        pass
+    return OrderProtocol
 
 
-def _serve(pipe, cert: str, key: str, cpu: int) -> None:
-    import asyncio
-
+def _serve(pipe, cert: str, key: str) -> None:
     import uvloop
 
-    pin(cpu)
+    _pin("server")
     ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     ctx.load_cert_chain(cert, key)
     ctx.set_alpn_protocols(["h2", "http/1.1"])
+    protocol = _order_protocol()
 
     async def main():
         loop = asyncio.get_running_loop()
         stop = loop.create_future()
         loop.add_reader(pipe.fileno(), lambda: stop.done() or stop.set_result(None))
-        server = await loop.create_server(_OrderProtocol, "127.0.0.1", 0, ssl=ctx)
+        server = await loop.create_server(protocol, "127.0.0.1", 0, ssl=ctx)
         pipe.send(server.sockets[0].getsockname()[1])
         await stop
         server.close()
@@ -659,31 +729,19 @@ def _serve(pipe, cert: str, key: str, cpu: int) -> None:
     uvloop.run(main())
 
 
-class OrderServer:
-    """A local HTTPS server (`_OrderProtocol` on uvloop, in its own process) that answers
-    every request with a canned order acknowledgement. `ssl_context()` trusts its
-    certificate."""
+class OrderServer(_Child):
+    """A local HTTPS server (uvloop, its own process) that acknowledges every request with
+    a canned order. `ssl_context()` trusts its throwaway certificate."""
 
-    def __init__(self, cpu: int = 2):
+    def __init__(self):
         self._dir = tempfile.TemporaryDirectory()
-        self.cert, key = self_signed(Path(self._dir.name))
-        ctx = multiprocessing.get_context("spawn")
-        self._pipe, child = ctx.Pipe()
-        self._proc = ctx.Process(target=_serve, args=(child, str(self.cert), str(key), cpu),
-                                 daemon=True)
-        self._proc.start()
-        self.port = _recv(self._pipe, self._proc)
+        self.cert, key = _self_signed(Path(self._dir.name))
+        super().__init__(_serve, str(self.cert), str(key))
         self.url = f"https://127.0.0.1:{self.port}{ORDER_PATH}"
 
     def ssl_context(self) -> ssl.SSLContext:
         return ssl.create_default_context(cafile=str(self.cert))
 
-    def __enter__(self) -> OrderServer:
-        return self
-
     def __exit__(self, *exc) -> None:
-        self._pipe.send("stop")
-        self._proc.join(5)
-        if self._proc.is_alive():
-            self._proc.kill()
+        super().__exit__(*exc)
         self._dir.cleanup()

@@ -4,11 +4,12 @@ Run: python benchmarks/ws_clients.py   (needs the [bench] extra)
 
 A separate process (`harness.Sender`) replays synthetic Kalshi frames to the client over
 loopback on an open-loop schedule, bursts in one write. Each candidate hands every text
-message to the consumer as bytes or str, in its fastest documented configuration (no
-compression, no keepalive pings, no size cap):
-- `websockets` (the incumbent, kalshi/ws.py), `recv(decode=False)`;
-- `aiohttp` `ClientSession.ws_connect`;
-- `picows`, a Cython client with a callback per frame.
+message to the consumer, with no compression, keepalive pings, or size cap:
+- `websockets`, configured and read as the incumbent `kalshi/ws.py` does (str, after
+  UTF-8 decoding; `recv(decode=False)` would skip that);
+- `aiohttp` `ClientSession.ws_connect` (str: it always decodes text frames);
+- `picows`, a Cython client with a callback per frame (bytes, which the JSON decoders
+  take directly).
 Latency runs from a frame's scheduled send to the consumer having it; each client runs on
 the stdlib asyncio loop and on uvloop.
 """
@@ -20,12 +21,18 @@ import harness
 from picows import WSCloseCode, WSListener, WSMsgType, ws_connect
 from websockets.asyncio.client import connect
 
+# The incumbent's settings (kalshi/ws.py `connect_feed`), plus no keepalive pings (the
+# replay server doesn't answer them) and no proxy from the environment.
+WEBSOCKETS_OPTIONS = {"max_size": None, "compression": None, "ping_interval": None,
+                      "proxy": None}
+
 
 async def via_websockets(url: str, sink: harness.Recorder) -> None:
-    async with connect(url, max_size=None, compression=None, ping_interval=None,
-                       proxy=None) as ws:
-        while not sink.done:
-            sink.frame(await ws.recv(decode=False))
+    async with connect(url, **WEBSOCKETS_OPTIONS) as ws:
+        async for frame in ws:  # as `kalshi.ws.Connection` reads it: text frames as str
+            sink.frame(frame)
+            if sink.done:
+                break
 
 
 async def via_aiohttp(url: str, sink: harness.Recorder) -> None:
@@ -38,17 +45,18 @@ async def via_aiohttp(url: str, sink: harness.Recorder) -> None:
             sink.frame(msg.data)
 
 
-class _Listener(WSListener):
-    """picows calls `on_ws_frame` per frame. Kalshi's frames aren't fragmented; a
-    production listener must still join continuation frames (`frame.fin`)."""
+class Listener(WSListener):
+    """Hands each text frame's bytes to `on_frame` and closes once `done()`. picows calls
+    `on_ws_frame` per frame; Kalshi's aren't fragmented, but a production listener must
+    still join continuation frames (`frame.fin`)."""
 
-    def __init__(self, sink: harness.Recorder):
-        self.sink = sink
+    def __init__(self, on_frame, done):
+        self.on_frame, self.done = on_frame, done
 
     def on_ws_frame(self, transport, frame) -> None:
         if frame.msg_type is WSMsgType.TEXT:
-            self.sink.frame(frame.get_payload_as_bytes())
-            if self.sink.done:
+            self.on_frame(frame.get_payload_as_bytes())
+            if self.done():
                 transport.send_close(WSCloseCode.OK)
                 transport.disconnect()
         elif frame.msg_type is WSMsgType.CLOSE:
@@ -57,35 +65,19 @@ class _Listener(WSListener):
 
 
 async def via_picows(url: str, sink: harness.Recorder) -> None:
-    transport, _ = await ws_connect(lambda: _Listener(sink), url)
+    transport, _ = await ws_connect(lambda: Listener(sink.frame, lambda: sink.done), url)
     await transport.wait_disconnected()
 
 
 CLIENTS = {"websockets": via_websockets, "aiohttp": via_aiohttp, "picows": via_picows}
-LOOPS = ("asyncio", "uvloop")
-PATTERNS = {"steady": harness.Pattern(2000),
-            "bursty": harness.Pattern(1000, burst_every=0.2, burst_size=200)}
 PACKAGES = ("websockets", "aiohttp", "picows", "uvloop")
 
 
-def candidate(loop: str, client):
-    return lambda url, sink: harness.run_on(loop, lambda: client(url, sink))
-
-
-def main(n: int = 40_000, speed: float = 1.0, rounds: int = 4) -> None:
+def main(n: int = 40_000, speed: float = 1.0, rounds: int | None = None) -> None:
     harness.header("ws_clients: WebSocket clients against a local replay", PACKAGES)
-    stream = harness.Stream(n // rounds)
-    candidates = {f"{name} / {loop}": candidate(loop, client)
-                  for name, client in CLIENTS.items() for loop in LOOPS}
-    for label, pattern in PATTERNS.items():
-        pattern = pattern.faster(speed)
-        offsets = harness.arrivals(n // rounds, pattern)
-        with harness.Steal() as steal:
-            lat, lag, cpu = harness.replay(candidates, stream.frames, offsets, rounds)
-        print(f"open-loop replay, {label} ({pattern}), {rounds} × {n // rounds:,} frames "
-              f"per client, host CPU steal {steal}")
-        print(harness.replay_table("client / loop", lat, lag, cpu))
-        print()
+    candidates = {f"{name} / {loop}": harness.on_loop(loop, client)
+                  for name, client in CLIENTS.items() for loop in ("asyncio", "uvloop")}
+    harness.report_ws_replays("client / loop", candidates, n, speed, rounds)
 
 
 if __name__ == "__main__":

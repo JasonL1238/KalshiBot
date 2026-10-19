@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import statistics
-import sys
 
 import harness
 import msgspec
@@ -77,14 +76,14 @@ class DeltaMsg(msgspec.Struct, tag="orderbook_delta", tag_field="type", gc=False
 
 class TradeMsg(msgspec.Struct, tag="trade", tag_field="type", gc=False):
     sid: int
-    seq: int
     msg: Trade
+    seq: int | None = None  # only book messages are known to carry one
 
 
 class FillMsg(msgspec.Struct, tag="fill", tag_field="type", gc=False):
     sid: int
-    seq: int
     msg: Fill
+    seq: int | None = None
 
 
 Message = SnapshotMsg | DeltaMsg | TradeMsg | FillMsg
@@ -126,13 +125,10 @@ def read_dict(m: dict) -> tuple:
     if kind == "orderbook_delta":
         return (m["seq"], b["market_ticker"], b["side"], b["price_dollars"], b["delta_fp"])
     if kind == "trade":
-        return (m["seq"], b["market_ticker"], b["yes_price_dollars"], b["count_fp"],
-                b["taker_side"])
+        return (b["market_ticker"], b["yes_price_dollars"], b["count_fp"], b["taker_side"])
     if kind == "fill":
-        return (m["seq"], b["order_id"], b["side"], b["action"], b["yes_price_dollars"],
-                b["count_fp"])
-    return (m["seq"], b["market_ticker"], [tuple(x) for x in b.get("yes_dollars_fp", ())],
-            [tuple(x) for x in b.get("no_dollars_fp", ())])
+        return (b["order_id"], b["side"], b["action"], b["yes_price_dollars"], b["count_fp"])
+    return (m["seq"], b["market_ticker"], b.get("yes_dollars_fp", ()), b.get("no_dollars_fp", ()))
 
 
 def read_struct(m: Message) -> tuple:
@@ -141,9 +137,9 @@ def read_struct(m: Message) -> tuple:
     if type(m) is DeltaMsg:
         return (m.seq, b.market_ticker, b.side, b.price_dollars, b.delta_fp)
     if type(m) is TradeMsg:
-        return (m.seq, b.market_ticker, b.yes_price_dollars, b.count_fp, b.taker_side)
+        return (b.market_ticker, b.yes_price_dollars, b.count_fp, b.taker_side)
     if type(m) is FillMsg:
-        return (m.seq, b.order_id, b.side, b.action, b.yes_price_dollars, b.count_fp)
+        return (b.order_id, b.side, b.action, b.yes_price_dollars, b.count_fp)
     return (m.seq, b.market_ticker, b.yes_dollars_fp, b.no_dollars_fp)
 
 
@@ -155,14 +151,12 @@ CANDIDATES = {
     "msgspec typed structs": lambda f: read_struct(typed_decoder.decode(f)),
 }
 CANDIDATES = {name: read for name, read in CANDIDATES.items() if read}
-PATTERNS = {"steady": harness.Pattern(2000),
-            "bursty": harness.Pattern(1000, burst_every=0.2, burst_size=200)}
 PACKAGES = ("orjson", "msgspec")
 
 
 def check_agreement(frames: list[bytes]) -> None:
-    for f in frames:
-        assert len({repr(read(f)) for read in CANDIDATES.values()}) == 1, f
+    for f in frames:  # compared as JSON, where tuples and lists are both arrays
+        assert len({msgspec.json.encode(read(f)) for read in CANDIDATES.values()}) == 1, f
 
 
 def by_type(stream: harness.Stream, snapshots: harness.Stream) -> dict[str, list[bytes]]:
@@ -183,20 +177,19 @@ def main(n: int = 40_000, speed: float = 1.0) -> None:
     sizes = {k: statistics.median(map(len, v)) for k, v in kinds.items()}
     print("median frame bytes: " + ", ".join(f"{k} {v:.0f}" for k, v in sizes.items()))
     print(f"\n{'ns per frame':<24}" + "".join(f"{k:>20}" for k in kinds))
-    ns = {kind: harness.per_call_ns(CANDIDATES, frames) for kind, frames in kinds.items()}
+    per_frame = {kind: harness.per_call_ns(CANDIDATES, frames) for kind, frames in kinds.items()}
     for name in CANDIDATES:
-        print(f"{name:<24}" + "".join(f"{ns[kind][name]:>20.0f}" for kind in kinds))
-    for label, pattern in PATTERNS.items():
-        offsets = harness.arrivals(n, pattern.faster(speed))
+        print(f"{name:<24}" + "".join(f"{per_frame[kind][name]:>20.0f}" for kind in kinds))
+    for label, pattern in harness.PATTERNS.items():
+        pattern = pattern.faster(speed)
+        offsets = harness.arrivals(n, pattern)
         with harness.Steal() as steal:
             lat = harness.compare({"(harness floor)": harness.noop, **CANDIDATES},
                                   stream.frames, offsets)
-        print(f"\nopen-loop replay, {label} ({pattern.faster(speed)}), {n:,} frames, "
-              f"host CPU steal {steal}")
+        print(f"\nopen-loop replay, {label} ({pattern}), {n:,} frames, host CPU steal {steal}")
         print(harness.table_head("decoder"))
         for name, ns in lat.items():
             print(harness.row(name, ns))
-    sys.stdout.flush()
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
-"""Keep the benchmark scripts runnable and their measurements honest: candidates must agree
-on every workload, the harness must charge queueing to the items queued, and each script
-must run end to end at a small scale. Scripts other than book.py need the [bench] extra."""
+"""Keep the benchmark scripts runnable and their measurements honest: the harness must
+charge queueing to the items queued, decoders and feeds must agree, every replayed frame
+must arrive intact, and each script must run end to end at a small scale. Scripts that
+import a [bench] package skip without it."""
 
 import importlib
 import json
@@ -19,10 +20,11 @@ from kalshibot.kalshi.ws import BookFeed  # noqa: E402
 
 
 def bench(name: str):
-    """A benchmark script, or a skip when the [bench] extra is missing."""
-    for package in ("msgspec", "orjson", "uvloop", "picows", "aiohttp", "h2"):
-        pytest.importorskip(package)
-    return importlib.import_module(name)
+    """A benchmark script, or a skip when it needs a missing [bench] package."""
+    try:
+        return importlib.import_module(name)
+    except ModuleNotFoundError as e:
+        pytest.skip(f"{name} needs {e.name} (the [bench] extra)")
 
 
 def test_book_candidates_agree_on_every_workload():
@@ -59,16 +61,14 @@ def test_open_loop_charges_queueing_to_the_items_behind():
         assert lat[k] >= 5_000_000 - offsets[k]
 
 
-def test_stream_frames_rebuild_the_generators_books():
+def test_stream_frames_keep_valid_books():
+    """Every frame applies (no negative size, no seq gap) and no book ever crosses."""
     stream = harness.Stream(5_000, markets=10)
     feed = BookFeed()
     for frame in stream.frames:
-        feed.on_message(json.loads(frame))
-    for m in stream.markets:
-        ob = feed.books[m.ticker]
-        assert dict(ob.yes.levels()) == m.sides["yes"]
-        assert dict(ob.no.levels()) == m.sides["no"]
-        assert ob.spread is None or ob.spread > 0
+        if (ticker := feed.on_message(json.loads(frame))) is not None:
+            spread = feed.books[ticker].spread
+            assert spread is None or spread > 0
     assert {msg["type"] for msg in stream.messages} == {
         "orderbook_snapshot", "orderbook_delta", "trade", "fill"}
 
@@ -86,24 +86,22 @@ def test_decoders_agree_and_typed_feed_matches_book_feed():
         assert ob.no.levels() == structs.books[ticker].no.levels()
 
 
-def test_signatures_verify():
-    bench("sign").check_signatures()
-
-
 SMALL = {  # script -> main() arguments for a run of a few seconds
     "decode": {"n": 2_000, "speed": 20},
     "sign": {"n": 400, "speed": 10},
-    "loop": {"n": 800, "speed": 10, "rounds": 2},
-    "ws_clients": {"n": 800, "speed": 10, "rounds": 2},
-    "http_clients": {"n": 200, "speed": 1, "rounds": 2},
-    "gc_pauses": {"n": 800, "speed": 10, "heaps": (0, 10_000), "rounds": 2},
-    "hot_path": {"n": 2_000, "speed": 5, "rounds": 2},
+    "loop": {"n": 800, "speed": 10},
+    "ws_clients": {"n": 1_200, "speed": 10},
+    "http_clients": {"n": 300, "speed": 1},
+    "gc_pauses": {"n": 800, "speed": 10, "heaps": (0, 10_000)},
+    "hot_path": {"n": 4_000, "speed": 5},
 }
 
 
 @pytest.mark.parametrize("script", SMALL)
-def test_script_runs_end_to_end(script, capsys):
-    bench(script).main(**SMALL[script])
+def test_script_runs_end_to_end(script, capsys, monkeypatch):
+    module = bench(script)
+    monkeypatch.setattr(harness, "VERIFY", True)  # replays check each frame's payload
+    module.main(**SMALL[script])
     out = capsys.readouterr().out
     assert out.startswith(f"{script}") and "platform: " in out and "python: " in out
-    assert "p99.9" in out
+    assert "p50 µs" in out
