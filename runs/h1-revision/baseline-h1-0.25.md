@@ -1,0 +1,18 @@
+| No-edge world | n | ρ̂ | cross-day | widening | naive in-sample | naive confirmation | null | bootstrap | null + bootstrap | null + DSR | null + DSR + PBO | Romano–Wolf | widened null | gauntlet |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| H1-shaped: boundary, 15 daily decisions a contract | 500 | 0.002 | -0.00 | 1.08 | **20.2** / **3.8** | **9.2** / **2.6** | 0.6 / 0.0 | **11.2** / **4.0** | 0.6 / 0.0 | 0.0 / 0.0 | 0.0 / 0.0 | 2.0 / 0.0 | 0.4 / 0.0 | 0.4 / 0.0 |
+| H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, binaries only | 500 | 0.004 | -0.00 | 1.08 | 6.2 / 0.8 | 6.4 / **1.2** | 3.8 / 0.2 | 6.8 / **1.6** | 3.8 / 0.2 | 0.2 / 0.0 | 0.0 / 0.0 | 4.0 / 0.4 | 3.6 / 0.0 | 3.6 / 0.0 |
+| H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, shock ρ = 0.5 lasting days (φ = 0.8) | 500 | 0.006 | 0.02 | 1.32 | **9.8** / **1.6** | **10.2** / **1.0** | **10.6** / **1.4** | **10.0** / **2.0** | **9.8** / **1.2** | 1.4 / 0.4 | 0.0 / 0.0 | **11.0** / **2.0** | **7.8** / **1.0** | **7.4** / **1.0** |
+| H1-shaped: NO at YES ≤ 20¢ only, half spread 1¢ | 500 | 0.002 | -0.00 | 1.10 | 6.0 / 0.6 | 5.2 / 0.6 | 4.8 / 0.4 | 5.6 / **1.4** | 4.8 / 0.4 | 0.0 / 0.0 | 0.0 / 0.0 | 4.4 / 0.2 | 4.0 / 0.2 | 4.0 / 0.2 |
+| H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢ | 500 | 0.003 | -0.01 | 1.08 | 4.4 / 0.0 | 6.0 / **1.2** | **7.2** / **1.0** | 6.2 / **1.4** | 6.0 / **1.0** | 0.4 / 0.2 | 0.0 / 0.0 | 6.6 / **1.0** | 6.6 / 0.8 | 5.6 / 0.8 |
+| H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, ladders all strike ladders | 500 | 0.002 | -0.00 | 1.05 | **7.0** / **1.0** | **7.8** / 0.8 | 1.2 / 0.0 | **9.6** / **1.0** | 1.2 / 0.0 | 0.2 / 0.0 | 0.0 / 0.0 | 1.0 / 0.0 | 1.2 / 0.0 | 1.2 / 0.0 |
+
+| Edge world | true net edge per position | positions/day | naive in-sample | null | null + DSR | null + DSR + PBO | Romano–Wolf | widened null | gauntlet |
+|---|---|---|---|---|---|---|---|---|---|
+
+- H1-shaped: boundary, 15 daily decisions a contract: R = 0.47 (R̄ from prices: 0.57)
+- H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, binaries only: R = 0.94 (R̄ from prices: 0.94)
+- H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, shock ρ = 0.5 lasting days (φ = 0.8): R = 1.16 (R̄ from prices: 1.57)
+- H1-shaped: NO at YES ≤ 20¢ only, half spread 1¢: R = 1.01 (R̄ from prices: 1.34)
+- H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢: R = 1.16 (R̄ from prices: 1.57)
+- H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, ladders all strike ladders: R = 0.63 (R̄ from prices: 0.81)

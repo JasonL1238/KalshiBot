@@ -1,0 +1,2 @@
+baseline-h1-0.25 rc=0 wall=25972s args=0.25 --only H1-shaped
+baseline-power-0.25 rc=0 wall=7647s args=power 0.25
