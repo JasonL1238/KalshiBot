@@ -1,0 +1,39 @@
+baseline-taker-0.1 rc=0 wall=789s args=0.1 --only boundary
+baseline-yes-0.1 rc=0 wall=212s args=0.1 --only 'YES family'
+baseline-edge1-0.1 rc=0 wall=138s args=0.1 --only '1¢ lower NO asks on q < 0.15'
+baseline-h1-0.1 rc=0 wall=587s args=0.1 --only 'H1-shaped: NO at YES ≤ 20¢ only, half spread 1¢'
+baseline-power-taker-0.1 rc=0 wall=154s args=power 0.1 --only '1¢ lower asks'
+baseline-power-h1-0.1 rc=0 wall=192s args=power 0.1 --only 'H1-shaped: 0.75'
+baseline-makers-0.25 rc=0 wall=3782s args=0.25 --only makers:
+baseline-power-makers-0.25 rc=0 wall=628s args=power 0.25 --only makers:
+one_interval-makers-0.25 rc=0 wall=3777s args=0.25 --only makers: --makers one_interval
+one_interval-power-makers-0.25 rc=0 wall=621s args=power 0.25 --only makers: --makers one_interval
+exact-makers-0.25 rc=0 wall=3865s args=0.25 --only makers: --makers exact
+exact-power-makers-0.25 rc=0 wall=680s args=power 0.25 --only makers: --makers exact
+centred-makers-0.25 rc=0 wall=4230s args=0.25 --only makers: --makers centred
+centred-power-makers-0.25 rc=0 wall=711s args=power 0.25 --only makers: --makers centred
+unchanged-taker-0.1 rc=0 wall=674s args=0.1 --only boundary
+unchanged-yes-0.1 rc=0 wall=209s args=0.1 --only 'YES family'
+unchanged-edge1-0.1 rc=0 wall=139s args=0.1 --only '1¢ lower NO asks on q < 0.15'
+unchanged-h1-0.1 rc=0 wall=527s args=0.1 --only 'H1-shaped: NO at YES ≤ 20¢ only, half spread 1¢'
+unchanged-power-taker-0.1 rc=0 wall=160s args=power 0.1 --only '1¢ lower asks'
+unchanged-power-h1-0.1 rc=0 wall=179s args=power 0.1 --only 'H1-shaped: 0.75'
+exact+centred-makers-0.25 rc=0 wall=3725s args=0.25 --only makers: --makers exact+centred
+exact+centred-power-makers-0.25 rc=0 wall=668s args=power 0.25 --only makers: --makers exact+centred
+CHAIN2DONE
+exact+flat-makers-0.25 rc=0 wall=4027s args=0.25 --only makers: --makers exact+flat
+exact+flat-power-makers-0.25 rc=0 wall=678s args=power 0.25 --only makers: --makers exact+flat
+CHAIN3DONE
+exact+flat+jackknife-makers-0.25 rc=0 wall=6555s args=0.25 --only makers: --makers exact+flat+jackknife
+exact+flat+jackknife-power-makers-0.25 rc=0 wall=1014s args=power 0.25 --only makers: --makers exact+flat+jackknife
+CHAIN4DONE
+unchanged-taker-0.1 rc=0 wall=766s args=0.1 --only boundary
+unchanged-yes-0.1 rc=0 wall=242s args=0.1 --only 'YES family'
+unchanged-edge1-0.1 rc=0 wall=166s args=0.1 --only '1¢ lower NO asks on q < 0.15'
+unchanged-h1-0.1 rc=0 wall=615s args=0.1 --only 'H1-shaped: NO at YES ≤ 20¢ only, half spread 1¢'
+unchanged-power-taker-0.1 rc=0 wall=189s args=power 0.1 --only '1¢ lower asks'
+unchanged-power-h1-0.1 rc=0 wall=226s args=power 0.1 --only 'H1-shaped: 0.75'
+final-makers-1.0 rc=0 wall=25488s args=1.0 --only makers:
+final-power-makers-1.0 rc=0 wall=3585s args=power 1.0 --only makers:
+final-held-out-1.0 rc=0 wall=11998s args=1.0 --only 'makers (held out)'
+FINALDONE

@@ -63,6 +63,18 @@ def test_a_null_total_tied_with_the_observed_one_counts_against_it():
     assert null.p_value(2, simulated) == 3 / 5
 
 
+def test_flat_weights_count_every_lag_alike():
+    # Bartlett weighs c_1 and c_2 by 2/3 and 1/3 at H = 2; flat weighs both by 1
+    assert null.Dependence(0.0, (0.5, 0.5)).cross_day == pytest.approx(1.0)
+    assert null.Dependence(0.0, (0.5, 0.5), flat=True).cross_day == pytest.approx(2.0)
+    # and the widening applies them: with positive c_h, flat widens more
+    s = surprises(60, 20, 0.0, np.random.default_rng(3))
+    positions = {k: s[k] for k in ("buy_yes", "count", "p_yes", "lo", "hi", "cluster", "day",
+                                   "break_even")}
+    bartlett = null.widening(null.Dependence(0.0, (0.2, 0.2)), **positions)
+    assert null.widening(null.Dependence(0.0, (0.2, 0.2), flat=True), **positions) > bartlett > 1
+
+
 def surprises(days, per_day, rho, rng, phi=0.0, buy_yes=None):
     """Standalone longshots (NO, or YES where `buy_yes`); a same-day factor of strength
     rho, AR(1) across days with persistence phi."""
@@ -266,3 +278,52 @@ def test_simulated_totals_match_one_big_draw():
                              np.random.default_rng(1))
     whole = null.recentered_pnl(yes, args["buy_yes"], args["count"], args["p_yes"])
     assert np.allclose(chunked, whole)
+
+
+def test_exact_boundary_variance_of_fills_on_one_outcome_by_hand():
+    """Three NO fills on one contract, out of time order: each later one covaries with
+    every earlier one by its own variance, v(1 − v) at the larger of its two win
+    probabilities."""
+    args = {"buy_yes": np.zeros(3, bool), "count": np.array([1.0, 2.0, 1.0]),
+            "p_yes": np.array([0.2, 0.3, 0.1]), "lo": np.zeros(3),
+            "hi": np.array([0.2, 0.3, 0.1]), "cluster": np.zeros(3, int),
+            "day": np.zeros(3, int), "break_even": np.array([0.85, 0.6, 0.9])}
+    order = np.array([2, 0, 1])  # the second fill first, then the third, then the first
+    v = np.maximum((1 - args["p_yes"]) * args["p_yes"],
+                   args["break_even"] * (1 - args["break_even"]))
+    s = -args["count"]
+    by_hand = (v[1] * s[1] ** 2 + v[2] * s[2] * (s[2] + 2 * s[1])
+               + v[0] * s[0] * (s[0] + 2 * (s[1] + s[2])))
+    exact = null._clusters(**args, exact=np.ones(3, bool), order=order)
+    assert exact["var_b"].iloc[0] == pytest.approx(by_hand)
+    assert null._clusters(**args)["var_b"].iloc[0] < by_hand  # nested intervals understate
+    partly = null._clusters(**args, exact=np.array([True, True, False]), order=order)
+    assert partly["var_b"].iloc[0] == null._clusters(**args)["var_b"].iloc[0]  # whole only
+
+
+def test_exact_needs_no_order_beside_other_clusters():
+    """Fills as given; a cluster without maker fills keeps its nested variance."""
+    args = {"buy_yes": np.zeros(3, bool), "count": np.ones(3), "p_yes": np.full(3, 0.2),
+            "lo": np.zeros(3), "hi": np.full(3, 0.2), "cluster": np.array([0, 0, 1]),
+            "day": np.zeros(3, int), "break_even": np.full(3, 0.8)}
+    exact = null._clusters(**args, exact=np.array([True, True, False]))
+    assert exact["var_b"].to_numpy() == pytest.approx([4 * 0.16, 0.16])
+
+
+def test_jackknife_drops_each_run_of_days_once():
+    one = surprises(200, 10, 0.3, RNG, phi=0.8)
+    reps = null.jackknife(**one, blocks=4)
+    assert len(reps) == 4 and all(isinstance(r, null.Dependence) for r in reps)
+    assert all(r.flat for r in null.jackknife(**one, blocks=4, flat=True))
+    full = null.dependence(**one)
+    assert np.mean([r.rho for r in reps]) == pytest.approx(full.rho, abs=0.05)
+    args = {k: v for k, v in one.items() if k != "won"}
+    w = np.array([null.widening(r, **args) for r in reps])
+    by_hand = np.sqrt(3 / 4 * ((w - w.mean()) ** 2).sum())  # (B − 1)/B, B = 4
+    assert null.jackknife_se(reps, **args) == pytest.approx(by_hand)
+    assert null.jackknife_se(reps[:1], **args) == 0.0
+
+
+def test_jackknife_skips_runs_of_days_without_a_cluster():
+    one = surprises(4, 10, 0.3, RNG)  # 4 days of clusters, 10 runs asked for
+    assert len(null.jackknife(**one, blocks=10)) == 4

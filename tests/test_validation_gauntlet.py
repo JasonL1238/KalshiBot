@@ -167,3 +167,82 @@ def test_evaluate_refuses_inputs_outside_the_nulls_scope():
     for bad in (overpaid, seconds):
         with pytest.raises(ValueError):
             gauntlet.evaluate(discovery, disc, daily, bad, RNG, gauntlet.Gates(draws=50))
+
+
+def maker_sample(rng, n, days, first_day=0, per_contract=4):
+    """Fair NO bids filled `per_contract` times on each of n contracts, at drifting prices."""
+    contracts = n // per_contract
+    p0 = rng.uniform(0.05, 0.3, contracts)
+    p_yes = np.clip(np.repeat(p0, per_contract) + rng.normal(0, 0.02, n), 0.01, 0.5)
+    yes = np.repeat(rng.random(contracts) < p0, per_contract)
+    paid = ((1 - p_yes) * 1_000_000).round()
+    return gauntlet.Positions(
+        net_pnl=np.where(yes, 0, 1_000_000) - paid, paid=paid, won=~yes,
+        buy_yes=np.zeros(n, bool), count=np.full(n, 100), p_yes=p_yes, lo=np.zeros(n),
+        hi=p_yes, cluster=np.repeat(np.arange(contracts), per_contract),
+        day=first_day + np.repeat(np.arange(contracts) % days, per_contract),
+        maker=np.ones(n, bool), order=np.arange(n))
+
+
+def test_a_takers_positions_flagged_as_not_maker_are_unchanged():
+    rng = np.random.default_rng(5)
+    disc, conf = positions(3000, 300, 0.0, rng), positions(600, 60, 0.02, rng, first_day=300)
+    returns, daily = pd.DataFrame({"a": rng.normal(0, 1, 300)}), pd.Series(rng.normal(0, 1, 60))
+    flagged = [replace(p, maker=np.zeros(len(p.day), bool)) for p in (disc, conf)]
+    gates = replace(GATES, draws=500)
+    plain = gauntlet.evaluate(returns, disc, daily, conf, np.random.default_rng(1), gates)
+    other = gauntlet.evaluate(returns, flagged[0], daily, flagged[1],
+                              np.random.default_rng(1), gates)
+    assert repr(other) == repr(plain)  # pbo is NaN with one configuration
+
+
+def test_a_makers_null_widens_for_fills_sharing_an_outcome():
+    """Flagged as maker fills, the same positions get the covariance of fills on one
+    outcome: a wider null (the jackknife SE is 0 here, without lasting dependence)."""
+    rng = np.random.default_rng(6)
+    disc, conf = maker_sample(rng, 4000, 200), maker_sample(rng, 800, 40, first_day=200)
+    plain = [replace(p, maker=None) for p in (disc, conf)]
+    _, as_taker, _ = gauntlet._null(*plain, np.random.default_rng(1), GATES)
+    dep, as_maker, _ = gauntlet._null(disc, conf, np.random.default_rng(1), GATES)
+    point = null.widening(dep, conf.buy_yes, conf.count, conf.p_yes, conf.lo, conf.hi,
+                          conf.cluster, conf.day, conf.break_even, exact=conf.maker,
+                          order=conf.order)
+    assert dep.flat and point > as_taker  # the exact covariance alone widens it
+    assert as_maker == pytest.approx(point)  # every replicate floors here, so the SE is 0
+
+
+def test_maker_fills_must_stay_on_standalone_contracts():
+    row = {"pnl": 0, "paid": 800_000, "won": 0.0, "side": "no", "fill_count": 1,
+           "p_yes": 0.2, "lo": 0.0, "hi": 0.2, "cluster": 0, "day": 0, "maker": True}
+    frame = pd.DataFrame([{**row, "ticker": "A-60"}, {**row, "ticker": "A-70"}])
+    with pytest.raises(ValueError, match="standalone"):
+        gauntlet.Positions.from_frame(frame)
+    assert gauntlet.Positions.from_frame(frame.assign(maker=False)).maker.sum() == 0
+    both = pd.DataFrame([{**row, "ticker": "A-60"}, {**row, "ticker": "A-60", "side": "yes"}])
+    with pytest.raises(ValueError, match="one side"):  # the exact covariance needs one sign
+        gauntlet.Positions.from_frame(both)
+
+
+def test_a_makers_null_adds_its_jackknife_se_when_shocks_last():
+    """With a lasting shock the dependence estimate moves between jackknife replicates, so
+    the maker null's widening is the point widening plus their SE, strictly wider."""
+    rng = np.random.default_rng(7)
+    disc, conf = maker_sample(rng, 4000, 200), maker_sample(rng, 800, 40, first_day=200)
+    z = np.zeros(240)
+    for d in range(1, 240):  # an AR(1) day factor, φ = 0.8, shared by both windows
+        z[d] = 0.8 * z[d - 1] + np.sqrt(1 - 0.8**2) * rng.standard_normal()
+    for p in (disc, conf):
+        contracts = p.cluster[::4]
+        u = scipy_stats.norm.cdf(np.sqrt(0.5) * z[p.day[::4]]
+                                 + np.sqrt(0.5) * rng.standard_normal(len(contracts)))
+        p.won[:] = np.repeat(u >= p.p_yes[::4], 4)  # NO wins when the draw is above p
+    dep, as_maker, _ = gauntlet._null(disc, conf, np.random.default_rng(1), GATES)
+    sample = (disc.won, disc.buy_yes, disc.count, disc.p_yes, disc.lo, disc.hi, disc.cluster,
+              disc.day, disc.break_even)
+    scored = (conf.buy_yes, conf.count, conf.p_yes, conf.lo, conf.hi, conf.cluster, conf.day,
+              conf.break_even)
+    point = null.widening(dep, *scored, exact=conf.maker, order=conf.order)
+    replicates = null.jackknife(*sample, GATES.jackknife_blocks, exact=disc.maker,
+                                order=disc.order, flat=True)
+    se = null.jackknife_se(replicates, *scored, exact=conf.maker, order=conf.order)
+    assert se > 0 and as_maker == pytest.approx(point + se)

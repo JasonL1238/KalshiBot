@@ -162,9 +162,8 @@ What these families share:
   calibrated queue models ([BACKTESTING](BACKTESTING.md) step 3); early exits need
   round-trip accounting and a path null (the null's scope there); a configuration that
   buys both sides (possible in H3, H4, H8, H9 and H10) needs the mixed-side conformance
-  world, and a maker family (H2, H8) a revised method that passes the maker rows and its
-  registration checks ([BACKTESTING](BACKTESTING.md), Conformance, step 6 and the
-  pre-registration paragraph).
+  world, and a maker family (H2, H8) the Maker null and its registration checks
+  ([BACKTESTING](BACKTESTING.md), the pre-registration paragraph).
 - **One mechanism per family** (BACKTESTING step 5), so m stays 12.
 - **H2 and H8:** Bartlett & O'Hara inform both, so S_h is 2026-03-12
   (`calendar.STUDY_END`), likely leaving them to forward tests

@@ -44,10 +44,9 @@ exchange. Whether it makes money is a result to measure, not an assumption.
   - Each confirmation records its power at the family's smallest meaningful edge
     (checked in conformance) and its results by category, and gets a Tier-2 report
     after its verdict.
-  - Revised methods (step 6 lists the makers' candidates): for the makers, passing every
-    maker row, and for H1, every H1-shaped row, in the size table and the third
-    ([BACKTESTING](BACKTESTING.md), Conformance); and `gauntlet.power` revised for the
-    bold rows of the third table.
+  - Revised methods ([BACKTESTING](BACKTESTING.md) step 6, Conformance): for H1, one
+    that passes every H1-shaped row in the size table and the third; and
+    `gauntlet.power` revised for the bold rows of the third table.
   - Before H1's confirmation test: H1-shaped taker rows in conformance (repeated
     positions on one contract, nested or sliding on one draw as the null prices them):
     measured 2026-10-15 ([BACKTESTING](BACKTESTING.md), Conformance), so H1's
@@ -76,11 +75,10 @@ exchange. Whether it makes money is a result to measure, not an assumption.
       data arrives (ESPN plays, NWS daily summaries and METARs, Coinbase and Kraken
       trades);
     - Tier-1 maker fills per sweep through the bid, with the null priced at fill time
-      (built), then the maker world in conformance ([BACKTESTING](BACKTESTING.md) step
-      6; measured 2026-10-15, so every family of resting bids held to settlement waits
-      for its revised method above), then, before H2 or H8 registers, each maker
-      family's R̄ on its discovery fills, computed by the runner as for H1 (above); H8's
-      gate count is done ([STRATEGIES](STRATEGIES.md) H8);
+      (built), then the maker world in conformance and the Maker null that passes it
+      (measured 2026-10; [BACKTESTING](BACKTESTING.md) step 6 and Conformance, Makers);
+      before a maker family registers, the checks of BACKTESTING's pre-registration
+      paragraph; H8's gate count is done ([STRATEGIES](STRATEGIES.md) H8);
     - external data keyed by when it became available;
     - latency as a pre-registered parameter: PnL against latency, a negative-latency
       canary, a time-shift placebo;

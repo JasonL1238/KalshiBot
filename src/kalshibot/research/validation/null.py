@@ -28,8 +28,10 @@ Three things widen it (`widening`), none using confirmation outcomes:
   estimates the correlation c_h of clusters h days apart.
 Both are correlations in the YES direction, estimated on discovery and applied to the
 confirmation sample's own clusters, so a family's YES and NO positions offset as they
-should and a busier confirmation gets proportionally more variance. Prices are
-fixed-point units (kalshi.models).
+should and a busier confirmation gets proportionally more variance. For a resting bid's
+fills the nested intervals give way to their covariance on one outcome, with flat
+cross-day weights and a jackknife-SE margin on the widening (`gauntlet._null`;
+docs/BACKTESTING.md, Maker null). Prices are fixed-point units (kalshi.models).
 """
 
 from __future__ import annotations
@@ -47,12 +49,15 @@ from kalshibot.kalshi.models import PRICE_SCALE
 class Dependence:
     rho: float  # correlation of YES surprises of different clusters on one day, in [0, 1]
     cross: tuple[float, ...]  # c_h, the same for clusters h = 1, 2, … days apart
+    flat: bool = False  # weigh every c_h by 1 instead of Bartlett's 1 − h/(H+1)
+
+    def weight(self, h: int) -> float:
+        return 1.0 if self.flat else 1 - h / (len(self.cross) + 1)
 
     @property
     def cross_day(self) -> float:
-        """2 Σ_h (1 − h/(H+1)) c_h: the Bartlett-weighted sum `widening` applies."""
-        lags = len(self.cross)
-        return 2 * sum((1 - h / (lags + 1)) * c for h, c in enumerate(self.cross, start=1))
+        """2 Σ_h w_h c_h: the weighted sum `widening` applies (`weight`)."""
+        return 2 * sum(self.weight(h) * c for h, c in enumerate(self.cross, start=1))
 
 
 def inputs(quotes: pd.DataFrame, method: str) -> pd.DataFrame:
@@ -163,11 +168,16 @@ def p_value(observed_net: float | np.ndarray, null_net: np.ndarray) -> float | n
     return (1 + exceed) / (1 + len(ordered))
 
 
-def _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even) -> pd.DataFrame:
+def _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact=None,
+              order=None) -> pd.DataFrame:
     """Per cluster: its day (when its last position settles), the null variance of its
     summed won × count (exact, from the shared uniform draw), that variance at the
     break-even boundary (scaled by the positions' larger variances), and its direction:
-    +1 if net long YES, else −1."""
+    +1 if net long YES, else −1. Where `exact` (a boolean per position) marks a whole
+    cluster, its boundary variance is instead the exact one of positions that all settle
+    on one outcome, each covarying with every earlier one (by `order`, default as given)
+    by its own boundary variance v, the larger of its null and break-even variances:
+    Σ_b v_b·s_b·(s_b + 2 Σ_{a before b} s_a), s the signed counts (`_shared_outcome_variance`)."""
     sign = np.where(buy_yes, 1.0, -1.0) * count  # won × count = constant + sign × YES
     win = np.where(buy_yes, p_yes, 1 - p_yes)
     df = pd.DataFrame({"cluster": cluster, "day": day, "lo": lo, "hi": hi, "sign": sign,
@@ -187,8 +197,23 @@ def _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even) -> pd.Dat
                                     sign=("sign", "sum"))
     ratio = (out["boundary"] / out["own"]).where(out["own"] > 0, 1.0)
     out["var_b"] = out["var"].clip(lower=0) * ratio
+    if exact is not None and np.any(exact):
+        whole = pd.Series(np.asarray(exact, bool)).groupby(df["cluster"]).all()
+        rows = df["cluster"].map(whole).to_numpy()
+        order = np.arange(len(df)) if order is None else np.asarray(order)
+        var = _shared_outcome_variance(df[rows], order[rows])
+        out.loc[var.index, "var_b"] = var.clip(lower=0)
     out["direction"] = np.where(out["sign"] >= 0, 1.0, -1.0)
     return out
+
+
+def _shared_outcome_variance(df: pd.DataFrame, order: np.ndarray) -> pd.Series:
+    """Per cluster of `_clusters`' rows `df`, the boundary variance of positions sharing
+    one outcome (`_clusters`, `exact`), in `order` within each cluster."""
+    df = df.assign(order=order).sort_values(["cluster", "order"], kind="stable")
+    before = df.groupby("cluster")["sign"].cumsum() - df["sign"]
+    v = df["boundary"] / df["sign"] ** 2  # the larger variance per contract
+    return (v * df["sign"] * (df["sign"] + 2 * before)).groupby(df["cluster"]).sum()
 
 
 def _days(clusters: pd.DataFrame) -> pd.DataFrame:
@@ -212,7 +237,8 @@ def _calendar(series: pd.Series) -> np.ndarray:
 
 def dependence(won: np.ndarray, buy_yes: np.ndarray, count: np.ndarray, p_yes: np.ndarray,
                lo: np.ndarray, hi: np.ndarray, cluster: np.ndarray, day: np.ndarray,
-               break_even: np.ndarray) -> Dependence:
+               break_even: np.ndarray, exact=None, order=None, flat: bool = False
+               ) -> Dependence:
     """Estimate the YES-direction correlations from realized outcomes, by the method of
     moments. Each cluster's surprise x, the sum of (won − P_null(won)) × count over its
     positions less k times its variance (k = Σx / Σv removes any edge in proportion), is
@@ -221,10 +247,47 @@ def dependence(won: np.ndarray, buy_yes: np.ndarray, count: np.ndarray, p_yes: n
     D days on which clusters settle) c_h = Σ_d Y_d Y_{d+h} / Σ_d S_d S_{d+h}, with Y_d and
     S_d a day's sums of y and s (zero on days without clusters); all clipped to [−1, 1]
     (ρ to [0, 1]). Estimate on positions the test doesn't score, over long stretches of
-    discovery, and broadly (every configuration's)."""
-    clusters = _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even)
+    discovery, and broadly (every configuration's). `exact` and `order` go to
+    `_clusters`; `flat` to the result (`Dependence.weight`)."""
+    return _moments(*_surprises(won, buy_yes, count, p_yes, lo, hi, cluster, day,
+                                break_even, exact, order), flat)
+
+
+def jackknife(won, buy_yes, count, p_yes, lo, hi, cluster, day, break_even, blocks: int,
+              exact=None, order=None, flat: bool = False) -> list[Dependence]:
+    """`dependence` re-estimated with each of `blocks` contiguous runs of the clusters'
+    calendar days dropped in turn (`_clusters` once, then only the moments), skipping
+    runs without a cluster. A replicate has fewer days, so H can be one lag shorter."""
+    clusters, x = _surprises(won, buy_yes, count, p_yes, lo, hi, cluster, day, break_even,
+                             exact, order)
+    days = clusters["day"].to_numpy()
+    edges = np.linspace(days.min(), days.max() + 1, blocks + 1)
+    block = np.searchsorted(edges, days, side="right") - 1
+    return [_moments(clusters[block != b], x[block != b], flat) for b in np.unique(block)]
+
+
+def jackknife_se(replicates: list[Dependence], buy_yes, count, p_yes, lo, hi, cluster, day,
+                 break_even, exact=None, order=None) -> float:
+    """The delete-a-block jackknife standard error of `widening` for these positions over
+    `jackknife`'s replicates: √((B − 1)/B · Σ_b (W_b − W̄)²); 0 with fewer than 2."""
+    days = _days(_clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact,
+                           order))
+    w = np.array([_factor(dep, days) for dep in replicates])
+    return float(np.sqrt(len(w) - 1) * w.std()) if len(w) > 1 else 0.0
+
+
+def _surprises(won, buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact, order
+               ) -> tuple[pd.DataFrame, pd.Series]:
+    """`_clusters`' output and each cluster's summed surprise (won − P_null(won)) × count."""
+    clusters = _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact,
+                         order)
     surprise = (np.asarray(won, dtype=float) - np.where(buy_yes, p_yes, 1 - p_yes)) * count
     x = pd.Series(surprise).groupby(np.asarray(cluster)).sum().reindex(clusters.index)
+    return clusters, x
+
+
+def _moments(clusters: pd.DataFrame, x: pd.Series, flat: bool = False) -> Dependence:
+    """`dependence`'s estimate from `_clusters`' output and each cluster's surprise x."""
     total = clusters["var_b"].sum()
     if total <= 0 or clusters["day"].nunique() < 2:
         return Dependence(0.0, ())
@@ -240,23 +303,28 @@ def dependence(won: np.ndarray, buy_yes: np.ndarray, count: np.ndarray, p_yes: n
     with np.errstate(all="ignore"):  # macOS Accelerate raises spurious flags in matmul
         cross = tuple(float(np.clip(ys[:-h] @ ys[h:] / den, -1, 1))
                       if (den := ss[:-h] @ ss[h:]) > 0 else 0.0 for h in range(1, lags + 1))
-    return Dependence(rho, cross)
+    return Dependence(rho, cross, flat)
 
 
 def widening(dep: Dependence, buy_yes: np.ndarray, count: np.ndarray, p_yes: np.ndarray,
              lo: np.ndarray, hi: np.ndarray, cluster: np.ndarray, day: np.ndarray,
-             break_even: np.ndarray) -> float:
+             break_even: np.ndarray, exact=None, order=None) -> float:
     """The factor (≥ 1) by which the null's variance must grow for these positions:
-    (ΣV + ρ·ΣW + 2 Σ_h (1 − h/(H+1)) c_h Σ_d A_d A_{d+h}) / ΣV0 over this sample's own
-    days (`_days`), never below the break-even variance ΣV, even where YES and NO
-    positions offset."""
-    days = _days(_clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even))
+    (ΣV + ρ·ΣW + 2 Σ_h w_h c_h Σ_d A_d A_{d+h}) / ΣV0 (w_h: `Dependence.weight`) over
+    this sample's own days (`_days`), never below the break-even variance ΣV, even where
+    YES and NO positions offset. `exact` and `order` go to `_clusters`."""
+    return _factor(dep, _days(_clusters(buy_yes, count, p_yes, lo, hi, cluster, day,
+                                        break_even, exact, order)))
+
+
+def _factor(dep: Dependence, days: pd.DataFrame) -> float:
+    """`widening`'s factor from `_days`' output."""
     null_var, boundary = days["V0"].sum(), days["V"].sum()
     if null_var <= 0:
         return 1.0
-    a, lags = _calendar(days["A"]), len(dep.cross)
+    a = _calendar(days["A"])
     with np.errstate(all="ignore"):  # as in `dependence`
-        cross = sum((1 - h / (lags + 1)) * c * float(a[:-h] @ a[h:])
+        cross = sum(dep.weight(h) * c * float(a[:-h] @ a[h:])
                     for h, c in enumerate(dep.cross, start=1) if h < len(a))
     total = boundary + dep.rho * days["W"].sum() + 2 * cross
     return float(max(1.0, max(boundary, total) / null_var))

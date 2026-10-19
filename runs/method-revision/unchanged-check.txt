@@ -1,0 +1,6 @@
+unchanged-edge1-0.1.md identical to baseline-edge1-0.1.md
+unchanged-h1-0.1.md identical to baseline-h1-0.1.md
+unchanged-power-h1-0.1.md identical to baseline-power-h1-0.1.md
+unchanged-power-taker-0.1.md identical to baseline-power-taker-0.1.md
+unchanged-taker-0.1.md identical to baseline-taker-0.1.md
+unchanged-yes-0.1.md identical to baseline-yes-0.1.md

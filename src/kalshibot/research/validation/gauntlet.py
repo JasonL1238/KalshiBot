@@ -35,6 +35,7 @@ class Gates:
     dependence_days: int = 400  # the dependence estimates use discovery's last decision days
     power_worlds: int = 1_000  # simulated confirmations behind a power estimate
     power_resamples: int = 2_000  # bootstrap draws in each
+    jackknife_blocks: int = 10  # a maker sample's widening SE (`_null`)
 
     @property
     def level(self) -> float:
@@ -60,16 +61,38 @@ class Positions:
     hi: np.ndarray
     cluster: np.ndarray  # integer cluster ids (`null.inputs`)
     day: np.ndarray  # settlement day: integer UTC days, as settle.close_day
+    maker: np.ndarray | None = None  # True: a resting bid's fill (`_null`); None: no maker fills
+    order: np.ndarray | None = None  # when each is priced, for ordering fills; None: as given
 
     @classmethod
     def from_frame(cls, df: pd.DataFrame) -> Positions:
         """From one row per position: pnl, paid, won, side ('yes' | 'no'), fill_count,
-        p_yes, lo, hi, cluster, day."""
+        p_yes, lo, hi, cluster, day, and optionally maker (the fill schema's), ticker and
+        priced_at. A family of resting bids trades standalone contracts on one side: the
+        Maker null takes a cluster's fills as sharing one outcome, a covariance that
+        holds only for one side's fills, so maker fills on several contracts of one cluster (an
+        event's buckets, a ladder's strikes) or on both sides of one are refused."""
+        if "maker" in df and df["maker"].any():
+            makers = df[df["maker"].astype(bool)].groupby("cluster")
+            if "ticker" in df and (makers["ticker"].nunique() > 1).any():
+                raise ValueError("maker fills on several contracts of one cluster: a family "
+                                 "of resting bids trades standalone contracts only")
+            if (makers["side"].nunique() > 1).any():
+                raise ValueError("maker fills on both sides of one contract: the Maker "
+                                 "null's variance is conservative for one side's fills only")
         return cls(net_pnl=df["pnl"].to_numpy(), paid=df["paid"].to_numpy(),
                    won=df["won"].to_numpy(float), buy_yes=(df["side"] == "yes").to_numpy(),
                    count=df["fill_count"].to_numpy(), p_yes=df["p_yes"].to_numpy(),
                    lo=df["lo"].to_numpy(), hi=df["hi"].to_numpy(),
-                   cluster=df["cluster"].to_numpy(), day=df["day"].to_numpy())
+                   cluster=df["cluster"].to_numpy(), day=df["day"].to_numpy(),
+                   maker=df["maker"].to_numpy(bool) if "maker" in df else None,
+                   order=(pd.to_datetime(df["priced_at"]).astype("int64").to_numpy()
+                          if "priced_at" in df else None))
+
+    @property
+    def makes(self) -> bool:
+        """Whether any position is a maker fill (`_null` then uses the maker null)."""
+        return self.maker is not None and bool(self.maker.any())
 
     @property
     def break_even(self) -> np.ndarray:
@@ -80,6 +103,9 @@ class Positions:
         won = np.asarray(self.won, dtype=float)
         if not ((0 <= won) & (won <= 1)).all():
             raise ValueError("won is the share of $1 paid per contract, in [0, 1]")
+        for extra in (self.maker, self.order):
+            if extra is not None and len(extra) != len(self.day):
+                raise ValueError("maker and order need one entry per position")
         if not ((0 <= self.lo) & (self.lo < self.hi) & (self.hi <= 1)).all():
             raise ValueError("each outcome interval must be a non-empty part of [0, 1]")
         day = np.asarray(self.day)
@@ -101,7 +127,7 @@ class Verdict:
     p_boot: float  # stationary bootstrap of confirmation daily returns
     p_independent: float  # diagnostic: the null without the widening
     rho: float  # same-day YES correlation between clusters, estimated on discovery
-    cross_day: float  # Bartlett-weighted cross-day correlations, estimated on discovery
+    cross_day: float  # weighted cross-day correlations (`null.Dependence.weight`), discovery
     widening: float  # null variance factor applied (1: none)
     dsr: float  # diagnostic: the selected config's discovery Sharpe, deflated for trials
     pbo: float  # diagnostic: overfitting of the discovery selection
@@ -154,13 +180,28 @@ def evaluate(discovery: pd.DataFrame, discovery_positions: Positions,
 def _null(d: Positions, p: Positions, rng: np.random.Generator, gates: Gates
           ) -> tuple[null.Dependence, float, np.ndarray]:
     """The dependence estimated on discovery positions `d`, the widening it implies for
-    confirmation positions `p`, and `p`'s null totals (not yet widened)."""
-    dep = null.dependence(d.won, d.buy_yes, d.count, d.p_yes, d.lo, d.hi, d.cluster, d.day,
-                          d.break_even)
-    widen = null.widening(dep, p.buy_yes, p.count, p.p_yes, p.lo, p.hi, p.cluster, p.day,
-                          p.break_even)
+    confirmation positions `p`, and `p`'s null totals (not yet widened). A sample with
+    maker fills (docs/BACKTESTING.md, Maker null) gets their covariance on one outcome
+    (`_maker_args`), every cross-day correlation weighted alike
+    (`null.Dependence.flat`), and a widening raised by its delete-a-block jackknife SE
+    over blocks of the dependence sample's days (`null.jackknife`, `gates.jackknife_blocks`)."""
+    sample = (d.won, d.buy_yes, d.count, d.p_yes, d.lo, d.hi, d.cluster, d.day, d.break_even)
+    scored = (p.buy_yes, p.count, p.p_yes, p.lo, p.hi, p.cluster, p.day, p.break_even)
+    flat = {"flat": True} if d.makes else {}
+    dep = null.dependence(*sample, **_maker_args(d), **flat)
+    widen = null.widening(dep, *scored, **_maker_args(p))
+    if d.makes:
+        replicates = null.jackknife(*sample, gates.jackknife_blocks, **_maker_args(d), **flat)
+        widen += null.jackknife_se(replicates, *scored, **_maker_args(p))
     return dep, widen, null.simulate_totals(p.lo, p.hi, p.cluster, p.buy_yes, p.count,
                                             p.p_yes, gates.draws, rng)
+
+
+def _maker_args(p: Positions) -> dict:
+    """`null._clusters`' exact and order for `p`: a resting bid's fills on one contract
+    all settle on its outcome, so with maker fills each cluster of them gets their
+    covariance on one outcome (docs/BACKTESTING.md, Maker null)."""
+    return {"exact": p.maker, "order": p.order} if p.makes else {}
 
 
 def _alternative(p: Positions, edge: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -188,7 +229,9 @@ def power(discovery_positions: Positions, positions: Positions, days: np.ndarray
     the world's total varies as the null's model says it would under the alternative;
     but never by less than the factor's same-day part, since the real bootstrap sees each
     day's own variance whatever the cross-day estimate (a negative one would otherwise
-    shrink the days and overstate power). The bootstrap uses `gates.power_resamples`
+    shrink the days and overstate power). With maker fills the worlds take the point
+    dependence (the best guess of the truth) while the null keeps `_null`'s jackknife
+    margin, which the real test pays too. The bootstrap uses `gates.power_resamples`
     draws per world, fewer than the test's: a slightly stricter cutoff, and a little
     more noise."""
     d, p = discovery_positions, positions
@@ -196,7 +239,7 @@ def power(discovery_positions: Positions, positions: Positions, days: np.ndarray
     null_net = totals * np.sqrt(widen)
     win, lo, hi = _alternative(p, edge)
     scale = np.sqrt(max(null.widening(dependence, p.buy_yes, p.count, hi - lo, lo, hi,
-                                      p.cluster, p.day, win)
+                                      p.cluster, p.day, win, **_maker_args(p))
                         for dependence in (dep, null.Dependence(dep.rho, ()))))
     stake = p.count * float(PRICE_SCALE)
     day = np.searchsorted(days, p.day)

@@ -1,0 +1,1 @@
+stress-shock exact+flat n=400: var(z_est)=1.03 var(z_oracle)=0.82 P(z_est>1.645)=0.045 P(z_oracle>1.645)=0.028 widen mean=13.27 oracle mean=14.68 cross est=0.81 oracle=0.93 rho est=0.118 oracle=0.121

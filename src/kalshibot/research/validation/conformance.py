@@ -103,7 +103,7 @@ def _positions(df: pd.DataFrame, config: tuple[str, str, int]) -> pd.DataFrame:
         pos["expected"] = synthetic.taker_net(pos["q"] if side == "yes" else 1 - pos["q"], ask)
     pos["priced_at"] = pos["fill_time"] = _priced_at(pos)
     pos["close_time"] = BASE + pd.to_timedelta(pos["day"] + 1, unit="D")  # the day's end
-    pos["side"], pos["fill_count"] = side, SIZE_SCALE
+    pos["side"], pos["fill_count"], pos["maker"] = side, SIZE_SCALE, "bottom" in df
     pos["won"] = pos["yes"] if side == "yes" else ~pos["yes"]
     pos["pnl"] = np.where(pos["won"], PRICE_SCALE * SIZE_SCALE, 0) - pos["cost"]
     return pos
@@ -132,8 +132,8 @@ def _coupling(pos: pd.DataFrame, quotes: pd.DataFrame) -> tuple[float, float]:
     `quotes` (`null.inputs`' output, with each contract's truth q) gives every contract's
     interval at every time a position in its cluster is priced: the truths' for R
     (`_true_intervals`), the null's for R̄, which counts two buckets' terms as 0. Its R̄
-    half moves to null.py before H1's confirmation test or a maker family's registration
-    (ROADMAP M3); R, from the world's truths, stays here."""
+    half moves to null.py before H1's confirmation test (ROADMAP M3); R, from the world's
+    truths, stays here."""
     pos = pos.sort_values("priced_at", kind="stable")
     count = pos["fill_count"].to_numpy(float)
     b = pos["paid"].to_numpy() / (count * PRICE_SCALE)
@@ -372,6 +372,13 @@ GRID = [  # (label, worlds, one_world settings); no edge unless the label says s
     ("H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢", 2000, H1_COUPLED),
     ("H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, ladders all strike ladders", 2000,
      {**H1_COUPLED, "strike_share": 1.0}),
+    # held out from the maker method's choice (`--only makers:` skips them), seeds fixed first
+    ("makers (held out): NO bids 1–5¢ below the truth, 64 sweeps and news, shock ρ = 0.5 "
+     "lasting days (φ = 0.5)", 2000, {**MAKERS_STRESS, "shock": 0.5, "persistence": 0.5}),
+    ("makers (held out): NO bids 1–5¢ below the truth, 64 sweeps and news, shock ρ = 0.3 "
+     "lasting days (φ = 0.8)", 2000, {**MAKERS_STRESS, "shock": 0.3, "persistence": 0.8}),
+    ("makers (held out): NO bids 5–25¢ below the truth, 16 sweeps and news, shock ρ = 0.5 "
+     "lasting days (φ = 0.8)", 2000, {**MAKERS, "news": 0.1, "shock": 0.5, "persistence": 0.8}),
 ]
 POWER_COLUMNS = ["naive in-sample", "null", "null + DSR", "null + DSR + PBO", "Romano–Wolf",
                  "widened null", "gauntlet"]
