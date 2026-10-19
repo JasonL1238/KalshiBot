@@ -118,4 +118,4 @@ def test_script_runs_end_to_end(script, capsys, monkeypatch):
     module.main(**SMALL[script])
     out = capsys.readouterr().out
     assert out.startswith(f"{script}") and "platform: " in out and "python: " in out
-    assert "p50 µs" in out
+    assert "mean µs" in out and "p99.9" in out
