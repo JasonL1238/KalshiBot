@@ -124,9 +124,13 @@ class Stack:
         await self.post(body, headers)
         self.timings.to_ack.append(harness.clock() - due)
 
-    async def drain(self) -> None:
-        while self.tasks:
-            await asyncio.gather(*self.tasks)
+    async def drain(self, timeout: float = 30) -> None:
+        """Wait for every order in flight; raise if one failed or hung."""
+        if pending := [t for t in self.tasks if not t.done()]:
+            done, late = await asyncio.wait(pending, timeout=timeout)
+            assert not late, f"{len(late)} orders unanswered after {timeout} s"
+        for task in list(self.tasks):
+            task.result()
 
 
 async def incumbent(url: str, sink, strategy: Strategy, timings: Timings,
@@ -204,7 +208,10 @@ def run(n: int, pattern: harness.Pattern, rounds: int
 
 
 def check_agreement(results: dict[str, StackRuns]) -> int:
-    """Every stack made the same decisions in every round. Returns decisions per round."""
+    """Every stack made the same decisions in every round, and every order was answered.
+    Returns decisions per round."""
+    for r in results.values():
+        assert all(len(t.to_ack) == len(t.to_order) for _, t in r.runs), "orders lost"
     decisions = [s.decisions for r in results.values() for s, _ in r.runs]
     assert all(d == decisions[0] for d in decisions), "stacks or rounds decided differently"
     assert decisions[0], "the rule never fired, so the comparison would be vacuous"
