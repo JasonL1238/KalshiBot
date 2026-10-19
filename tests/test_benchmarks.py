@@ -1,8 +1,10 @@
-"""Keep the benchmark scripts runnable and their measurements honest: the harness must
-charge queueing to the items queued, decoders and feeds must agree, every replayed frame
-must arrive intact, and each script must run end to end at a small scale. Scripts that
-import a [bench] package skip without it."""
+"""Keep the benchmark scripts runnable and their measurements honest: the harness and P1
+must charge queueing and processing to the items that wait for them, decoders and feeds
+must agree, every replayed WebSocket frame must arrive intact, and each script other
+than book.py must run end to end at a small scale. Scripts that import a [bench] package
+skip without it."""
 
+import asyncio
 import faulthandler
 import importlib
 import json
@@ -12,7 +14,10 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from _pytest.faulthandler import fault_handler_stderr_fd_key
+from cryptography.hazmat.primitives.asymmetric import ed25519
 from packaging.requirements import Requirement
+from websockets.asyncio.client import connect
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "benchmarks"))
@@ -20,6 +25,7 @@ sys.path.insert(0, str(ROOT / "benchmarks"))
 import book  # noqa: E402
 import harness  # noqa: E402
 
+from kalshibot.kalshi.auth import KalshiSigner  # noqa: E402
 from kalshibot.kalshi.ws import BookFeed  # noqa: E402
 
 # The [bench] extra's packages; each imports under its distribution's name.
@@ -70,6 +76,60 @@ def test_open_loop_charges_queueing_to_the_items_behind():
         assert lat[k] >= 5_000_000 - offsets[k]
 
 
+def test_replay_charges_a_stall_to_every_frame_queued_behind_it():
+    """Over a real replay, frames 1 ms apart: the consumer stalls 20 ms on frame 10, so
+    frame k (due at k ms, handled no earlier than 30 ms) is charged at least 30 - k ms."""
+    frames = harness.Stream(40, markets=10).frames
+    offsets = [k * 1_000_000 for k in range(40)]
+
+    async def stalling(url: str, sink: harness.Recorder) -> None:
+        async with connect(url, max_size=None, compression=None, ping_interval=None,
+                           proxy=None) as ws:
+            async for frame in ws:
+                if sink.t0 and sink.i == 10:
+                    time.sleep(0.020)
+                sink.frame(frame)
+                if sink.done:
+                    break
+
+    result = harness.replay({"stall": lambda url, sink: asyncio.run(stalling(url, sink))},
+                            frames, offsets, rounds=1)
+    lat = result.lat["stall"]
+    assert all(lat[k] >= (30 - k) * 1_000_000 for k in range(10, 30)), list(lat)
+
+
+def test_p1_charges_each_frame_its_processing_and_its_queue():
+    """Every frame due at once, each decode taking at least 1 ms: frame i is done no
+    earlier than (i + 1) ms after it was due, and never before its own stages are."""
+    hot_path, msgspec = bench("hot_path"), importlib.import_module("msgspec")
+    frames = harness.Stream(100, markets=10).frames
+
+    def slow_decode(frame: bytes):
+        end = time.perf_counter_ns() + 1_000_000
+        while time.perf_counter_ns() < end:
+            pass
+        return hot_path.decode.typed_decoder.decode(frame)
+
+    async def consume():
+        async def post(body, headers):
+            pass
+
+        signer = KalshiSigner("test", ed25519.Ed25519PrivateKey.generate())
+        sink, timings = harness.Recorder([0] * len(frames)), hot_path.Timings.for_frames(
+            len(frames))
+        stack = hot_path.Stack(slow_decode, hot_path.decode.StructFeed(),
+                               hot_path.Rule(signer, msgspec.json.encode), timings, sink, post)
+        stack.on_frame(str(harness.clock()).encode())  # t0: every frame is due now
+        for frame in frames:
+            stack.on_frame(frame)
+        await stack.drain()
+        return sink, timings
+
+    sink, t = asyncio.run(consume())
+    for i in range(len(frames)):
+        assert sink.lat[i] >= max((i + 1) * 1_000_000, t.decode[i] + t.book[i]), i
+
+
 def test_stream_frames_rebuild_the_generators_books():
     """Every frame applies (no negative size, no seq gap), no book ever crosses, and the
     books end as the generator left them."""
@@ -112,11 +172,12 @@ SMALL = {  # script -> main() arguments for a run of a few seconds
 
 
 @pytest.mark.parametrize("script", SMALL)
-def test_script_runs_end_to_end(script, capsys, monkeypatch):
+def test_script_runs_end_to_end(script, capsys, monkeypatch, request):
     module = bench(script)
     monkeypatch.setattr(harness, "VERIFY", True)  # replays check each frame's payload
-    # a hung replay fails, with stacks (pytest captures sys.stderr, which has no fileno)
-    faulthandler.dump_traceback_later(300, exit=True, file=sys.__stderr__)
+    # a hung replay fails with its stacks, on the stderr pytest keeps for faulthandler
+    faulthandler.dump_traceback_later(
+        300, exit=True, file=request.config.stash[fault_handler_stderr_fd_key])
     try:
         module.main(**SMALL[script])
     finally:

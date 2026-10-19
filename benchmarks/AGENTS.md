@@ -4,16 +4,17 @@ Each script reproduces a decision recorded in [docs/EXECUTION.md](../docs/EXECUT
 which also holds the M4 method (open-loop replay, coordinated-omission correction,
 interleaved rounds, host noise) and every result. Results depend on the machine, so
 record platform and Python version next to any numbers you publish (every script prints
-them first). `tests/test_benchmarks.py` runs each script at a small scale, with replayed
-WebSocket frames checked byte for byte.
+them first). `tests/test_benchmarks.py` runs each script other than book.py at a small
+scale, with replayed WebSocket frames checked byte for byte; book.py's candidates must
+agree.
 
-Setup: `pip install -e ".[dev,bench]"`. Run: `python benchmarks/<script>.py`.
+Run: `python benchmarks/<script>.py`.
 
 | File | Decision it backs |
 |------|-------------------|
 | `book.py` | Order-book side structure: `kalshi.models.BookSide` (dict + price bitmap) |
 | `harness.py` | Shared: schedules, open-loop timing, synthetic frames, replay sender, local order server |
-| `decode.py` | JSON decoder for WebSocket frames (stdlib json, orjson, msgspec); `decode.Message` structs and `StructFeed` |
+| `decode.py` | JSON decoder for WebSocket frames (stdlib json, orjson, msgspec); `decode.Message` structs, and `StructFeed`, P1's prototype of `kalshi.ws.BookFeed` for them, kept equal to it by the decoder-agreement test (M5 keeps one feed, in kalshi/ws.py) |
 | `sign.py` | Trading key type: Ed25519 vs RSA-2048 PSS |
 | `ws_clients.py` | Event loop and WebSocket client: websockets vs aiohttp vs picows vs a bare reader (the loop alone), each on asyncio and uvloop |
 | `http_clients.py` | Order HTTP client: httpx HTTP/1.1 and HTTP/2 vs aiohttp |

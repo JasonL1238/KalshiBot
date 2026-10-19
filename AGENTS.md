@@ -26,7 +26,7 @@ What the project is: [README.md](README.md). Each `CLAUDE.md` is a symlink to th
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev,bench]"
 git config core.hooksPath .githooks     # once per clone
 pytest -q && ruff check .               # `data` tests skip without DATA_DIR/raw;
                                         # `slow` tests run only when -m selects them
