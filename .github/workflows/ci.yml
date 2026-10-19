@@ -16,6 +16,6 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev,bench]"
       - run: ruff check .
       - run: pytest -q

@@ -246,6 +246,29 @@ def test_runtime_dependencies_match_imports():
     assert not unused, f"declared but never imported: {sorted(unused)}"
 
 
+def test_benchmark_imports_are_declared():
+    """Benchmarks may use runtime dependencies and the dev and bench extras, nothing else."""
+    import tomllib
+    from importlib.metadata import packages_distributions
+
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
+
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
+    extras = project["optional-dependencies"]
+    declared = {canonicalize_name(Requirement(r).name)
+                for r in project["dependencies"] + extras["dev"] + extras["bench"]}
+    dists, local = packages_distributions(), {p.stem for p in (ROOT / "benchmarks").glob("*.py")}
+    for path in (ROOT / "benchmarks").glob("*.py"):
+        for name in imported_names(path.read_text(), ""):
+            top = name.split(".")[0]
+            if top in sys.stdlib_module_names or top in local or top in ("kalshibot", ""):
+                continue
+            owners = dists.get(top, [top])  # not installed: assume the import name
+            assert {canonicalize_name(d) for d in owners} & declared, (
+                f"benchmarks/{path.name} imports {top}; declare it in the bench extra")
+
+
 @pytest.mark.parametrize("package, forbidden", LAYERS.items())
 def test_layering_static(package, forbidden):
     folder = ROOT / "src" / Path(*package.split("."))

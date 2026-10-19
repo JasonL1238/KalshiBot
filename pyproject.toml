@@ -30,6 +30,19 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6", "hypothesis>=6", "sortedcontainers>=2.4"]
+# The M4 execution benchmarks (benchmarks/AGENTS.md). Not needed to research or trade.
+bench = [
+    "aiohttp>=3.11",
+    "h2>=4.1",  # httpx's HTTP/2, and the benchmarks' local order server
+    "msgspec>=0.19",
+    "orjson>=3.10",
+    "picows>=2",
+    # httpcore retries a failed `import sniffio` on every async request when it's missing,
+    # which costs ~0.2 ms per request.
+    "sniffio>=1.3",
+    "uvloop>=0.21",
+    "websockets>=15",  # connect(proxy=...)
+]
 
 [project.scripts]
 kalshibot = "kalshibot.cli:app"
