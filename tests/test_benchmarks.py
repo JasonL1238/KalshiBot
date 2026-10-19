@@ -7,11 +7,14 @@ import importlib
 import json
 import sys
 import time
+import tomllib
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "benchmarks"))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "benchmarks"))
 
 import book  # noqa: E402
 import harness  # noqa: E402
@@ -21,9 +24,13 @@ from kalshibot.kalshi.ws import BookFeed  # noqa: E402
 
 def bench(name: str):
     """A benchmark script, or a skip when it needs a missing [bench] package."""
+    extra = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"][
+        "optional-dependencies"]["bench"]
     try:
         return importlib.import_module(name)
     except ModuleNotFoundError as e:
+        if e.name.split(".")[0] not in {Requirement(r).name for r in extra}:
+            raise
         pytest.skip(f"{name} needs {e.name} (the [bench] extra)")
 
 
@@ -36,8 +43,7 @@ def test_arrivals_keep_rate_and_bursts():
     pattern = harness.Pattern(1000, burst_every=0.1, burst_size=50)
     times = harness.arrivals(20_000, pattern)
     assert times == sorted(times) and len(times) == 20_000
-    span = times[-1] / 1e9
-    assert 20_000 / span == pytest.approx(1000 + 50 / 0.1, rel=0.05)
+    assert 20_000 / (times[-1] / 1e9) == pytest.approx(pattern.mean_rate, rel=0.05)
     assert times.count(round(0.1 * 1e9)) == 50  # a burst shares one instant
 
 
@@ -61,14 +67,20 @@ def test_open_loop_charges_queueing_to_the_items_behind():
         assert lat[k] >= 5_000_000 - offsets[k]
 
 
-def test_stream_frames_keep_valid_books():
-    """Every frame applies (no negative size, no seq gap) and no book ever crosses."""
+def test_stream_frames_rebuild_the_generators_books():
+    """Every frame applies (no negative size, no seq gap), no book ever crosses, and the
+    books end as the generator left them."""
     stream = harness.Stream(5_000, markets=10)
     feed = BookFeed()
     for frame in stream.frames:
         if (ticker := feed.on_message(json.loads(frame))) is not None:
             spread = feed.books[ticker].spread
             assert spread is None or spread > 0
+    for m in stream.markets:
+        ob = feed.books[m.ticker]
+        assert dict(ob.yes.levels()) == m.sides["yes"]
+        assert dict(ob.no.levels()) == m.sides["no"]
+    assert len(stream.frames) == 5_000
     assert {msg["type"] for msg in stream.messages} == {
         "orderbook_snapshot", "orderbook_delta", "trade", "fill"}
 

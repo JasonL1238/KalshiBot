@@ -191,14 +191,14 @@ def run(n: int, pattern: harness.Pattern, rounds: int) -> tuple[dict[str, StackR
 
             def go(url: str, sink: harness.Recorder) -> None:
                 strategy, timings = Strategy(signer, encode), Timings.for_frames(len(offsets))
-                runs[name].append((strategy, timings))
+                if not sink.warmup:
+                    runs[name].append((strategy, timings))
                 harness.run_on(loop, lambda: consume(url, sink, strategy, timings, server))
             return go
 
         result = harness.replay({name: candidate(name) for name in STACKS}, stream.frames,
                                 offsets, rounds)
-    # replay() runs each candidate once untimed before its rounds: drop that warm-up
-    return {name: StackRuns(r[1:], result.lat[name], result.cpu[name])
+    return {name: StackRuns(r, result.lat[name], result.cpu[name])
             for name, r in runs.items()}, result.lag
 
 

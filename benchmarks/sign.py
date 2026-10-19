@@ -1,6 +1,6 @@
 """Which key type should the trading key be: Ed25519 or RSA-2048 (RSA-PSS)?
 
-Run: python benchmarks/sign.py   (needs the [bench] extra)
+Run: python benchmarks/sign.py
 
 Kalshi accepts both (docs/RESEARCH.md §1) and verifies with whichever public key is
 registered. Each candidate runs `KalshiSigner.headers` for an order POST: timestamp,

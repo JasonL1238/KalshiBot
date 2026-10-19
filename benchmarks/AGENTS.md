@@ -5,7 +5,7 @@ which also holds the M4 method (open-loop replay, coordinated-omission correctio
 interleaved rounds, host noise) and every result. Results depend on the machine, so
 record platform and Python version next to any numbers you publish (every script prints
 them first). `tests/test_benchmarks.py` runs each script at a small scale, with replayed
-frames checked byte for byte.
+WebSocket frames checked byte for byte.
 
 Setup: `pip install -e ".[dev,bench]"`. Run: `python benchmarks/<script>.py`.
 

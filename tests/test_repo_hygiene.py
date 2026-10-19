@@ -215,22 +215,22 @@ def test_imported_names_resolves_nested_and_relative_imports():
         source, "kalshibot.execution")
 
 
-def requirements(*groups: str) -> dict:
-    """Canonical name -> Requirement for pyproject's dependencies ("") and the extras."""
+def requirements(*extras: str, core: bool = True) -> dict:
+    """Canonical name -> Requirement for pyproject's dependencies and the given extras."""
     import tomllib
 
     from packaging.requirements import Requirement
     from packaging.utils import canonicalize_name
 
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
-    lines = [r for g in groups for r in (project["dependencies"] if g == ""
-                                         else project["optional-dependencies"][g])]
+    lines = (project["dependencies"] if core else []) + [
+        r for e in extras for r in project["optional-dependencies"][e]]
     return {canonicalize_name(r.name): r for r in map(Requirement, lines)}
 
 
 def third_party_imports(paths, local: set[str] = frozenset()):
     """(path, top-level module, distributions providing it) for each import of a package
-    outside the stdlib and this repo. An uninstalled module maps to its own name."""
+    outside the stdlib and this repo; None for a module that isn't installed."""
     from importlib.metadata import packages_distributions
 
     from packaging.utils import canonicalize_name
@@ -243,19 +243,20 @@ def third_party_imports(paths, local: set[str] = frozenset()):
             top = name.split(".")[0]
             if top in sys.stdlib_module_names or top in local or top in ("kalshibot", ""):
                 continue
-            yield path, top, {canonicalize_name(d) for d in dists.get(top, [top])}
+            yield path, top, ({canonicalize_name(d) for d in dists[top]} if top in dists
+                              else None)
 
 
 def test_runtime_dependencies_match_imports():
-    from importlib.metadata import packages_distributions, requires
+    from importlib.metadata import requires
 
     from packaging.requirements import Requirement
     from packaging.utils import canonicalize_name
 
-    specs = requirements("")
-    declared, installed, used = set(specs), packages_distributions(), set()
+    specs = requirements()
+    declared, used = set(specs), set()
     for path, top, owners in third_party_imports((ROOT / "src").rglob("*.py")):
-        if top not in installed:
+        if owners is None:  # not installed here
             continue
         assert owners & declared, (
             f"{path.relative_to(ROOT)} imports {top}, which pyproject.toml doesn't declare")
@@ -271,10 +272,13 @@ def test_runtime_dependencies_match_imports():
 
 def test_benchmark_imports_are_declared():
     """Benchmarks may use runtime dependencies and the dev and bench extras, nothing else."""
-    declared = set(requirements("", "dev", "bench"))
+    from packaging.utils import canonicalize_name
+
+    declared = set(requirements("dev", "bench"))
     scripts = sorted((ROOT / "benchmarks").glob("*.py"))
     for path, top, owners in third_party_imports(scripts, {p.stem for p in scripts}):
-        assert owners & declared, (
+        # an uninstalled module (bench extra missing) is taken by its own name
+        assert (owners or {canonicalize_name(top)}) & declared, (
             f"benchmarks/{path.name} imports {top}; declare it in the bench extra")
 
 

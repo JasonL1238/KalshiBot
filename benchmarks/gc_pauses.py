@@ -43,6 +43,7 @@ except ImportError:  # no msgspec: the dict paths alone
 
 PATTERN = harness.PATTERNS["bursty"]
 SETTINGS = ("(harness floor)", "default", "freeze", "disable")
+FREE_THREADED = bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
 
 
 def paths() -> dict[str, tuple]:
@@ -59,9 +60,6 @@ def long_lived_heap(n: int) -> list[dict]:
     """`n` dicts holding a list and a dict each: 3n GC-tracked containers."""
     return [{"ticker": f"KXSYN{i:07d}", "fields": [i, str(i)], "meta": {"i": i}}
             for i in range(n)]
-
-
-FREE_THREADED = bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
 
 
 class Pauses:
@@ -117,15 +115,18 @@ def stepper(path: tuple):
 
 
 def kept_per_message(path: tuple, frames: list[bytes]) -> float:
-    """GC-tracked containers the path keeps alive per message."""
+    """GC-tracked containers the path keeps alive per message once its books exist: the
+    growth over the second half of the frames."""
+    step, _ = stepper(path)
+    half = len(frames) // 2
+    for f in frames[:half]:
+        step(f)
     gc.collect()
     before = len(gc.get_objects())
-    step, tape = stepper(path)
-    for f in frames:
+    for f in frames[half:]:
         step(f)
-    kept = len(gc.get_objects()) - before
-    del tape
-    return kept / len(frames)
+    gc.collect()
+    return (len(gc.get_objects()) - before) / (len(frames) - half)
 
 
 def run(setting: str, path: tuple, frames: list[bytes], offsets: list[int],
@@ -153,7 +154,6 @@ def main(n: int = 40_000, speed: float = 1.0, heaps: tuple[int, ...] = (0, 1_000
     print(f"gc thresholds {gc.get_threshold()}")
     rounds = rounds or harness.default_rounds(len(SETTINGS))
     pattern = PATTERN.faster(speed)
-    rate = pattern.rate + (pattern.burst_size / pattern.burst_every)
     stream = harness.Stream(n // rounds)
     offsets = harness.arrivals(n // rounds, pattern)
     for size in heaps:
@@ -165,10 +165,10 @@ def main(n: int = 40_000, speed: float = 1.0, heaps: tuple[int, ...] = (0, 1_000
         for name, path in paths().items():
             kept = kept_per_message(path, stream.frames)
             if kept >= 0.01:
-                every = tracked / 4 / (kept * rate)
+                every = tracked / 4 / (kept * pattern.mean_rate)
                 every_s = f"{every:,.0f}" if every >= 10 else f"{every:.2f}"
                 print(f"  {name}: {kept:.1f} tracked containers kept per message, so at "
-                      f"{rate:,.0f} msgs/s a full collection about every {every_s} s")
+                      f"{pattern.mean_rate:,.0f} msgs/s a full collection about every {every_s} s")
         print()
         for name, path in paths().items():
             lat = {s: array("q") for s in SETTINGS}

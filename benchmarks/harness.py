@@ -41,7 +41,8 @@ ORDER_PATH = "/trade-api/v2/portfolio/events/orders"
 ORDER = {"ticker": "KXSYN000-26OCT20-B50.5", "side": "bid", "count": "1.00",
          "price": "0.5600", "time_in_force": "immediate_or_cancel",
          "self_trade_prevention_type": "taker_at_cross"}  # a V2 order body (RESEARCH §1)
-VERIFY = False  # tests set this: replays then check every payload against the frame sent
+VERIFY = False  # tests set this: WebSocket replays then check each payload against its frame
+WARMUP = 1000  # items each candidate runs untimed before its rounds
 
 
 # ---- platform -------------------------------------------------------------------------
@@ -66,7 +67,8 @@ def _version(package: str) -> str:
         return "missing"
 
 
-# CPUs for the replay's processes, kept apart where the OS can pin (Linux, 3+ CPUs).
+# CPUs for the replay's processes, kept apart where the OS can pin (Linux, 3+ CPUs). Read
+# when the parent imports this, unpinned; children get their CPU as an argument.
 _ALLOWED = sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else []
 CPUS = (dict(zip(("sender", "client", "server"), _ALLOWED[:3], strict=True))
         if len(_ALLOWED) >= 3 else {})
@@ -85,18 +87,22 @@ def header(title: str, packages: Sequence[str] = ()) -> None:
     print()
 
 
-def _pin(role: str) -> set[int] | None:
-    """Pin this process to its role's CPU, if any; returns the previous CPU set."""
-    if role not in CPUS:
+def _pin(cpu: int | None) -> set[int] | None:
+    """Pin this process to `cpu` (None: leave it); returns the previous CPU set."""
+    if cpu is None:
         return None
     before = os.sched_getaffinity(0)
-    os.sched_setaffinity(0, {CPUS[role]})
+    os.sched_setaffinity(0, {cpu})
     return before
+
+
+def _affinity() -> set[int] | None:
+    return os.sched_getaffinity(0) if hasattr(os, "sched_getaffinity") else None
 
 
 @contextmanager
 def _pinned(role: str):
-    before = _pin(role)
+    before = _pin(CPUS.get(role))
     try:
         yield
     finally:
@@ -111,6 +117,11 @@ class Pattern:
     rate: float  # Poisson background arrivals per second
     burst_every: float = 0.0  # seconds between bursts; 0 means no bursts
     burst_size: int = 0  # items that arrive at the same instant in each burst
+
+    @property
+    def mean_rate(self) -> float:
+        """Arrivals per second, bursts included."""
+        return self.rate + (self.burst_size / self.burst_every if self.burst_every else 0)
 
     def faster(self, factor: float) -> Pattern:
         """The same shape compressed in time."""
@@ -205,7 +216,7 @@ def compare(candidates: dict[str, Callable], items: Sequence, offsets: Sequence[
     an equal slice of the schedule, after one untimed warm-up pass per candidate."""
     names, rounds = list(candidates), rounds or default_rounds(len(candidates))
     for fn in candidates.values():
-        for item in items[:1000]:
+        for item in items[:WARMUP]:
             fn(item)
     out = {name: array("q") for name in names}
     per = len(offsets) // rounds
@@ -378,12 +389,17 @@ class Stream:
             emit("orderbook_snapshot", m.snapshot())
         while len(self.messages) < n:
             ts_ms += rng.randint(0, 3)
+            m = rng.choice(self.markets)
             if rng.random() < 0.01:
-                emit("fill", self.fill(rng, rng.choice(self.markets), ts_ms))
+                emit("fill", self.fill(rng, m, ts_ms))
                 continue
-            for kind, body in rng.choice(self.markets).step(ts_ms):
+            before = {side: dict(levels) for side, levels in m.sides.items()}, m.fair
+            events = m.step(ts_ms)
+            if len(self.messages) + len(events) > n:  # it won't fit: undo it, end on fills
+                m.sides, m.fair = before
+                continue
+            for kind, body in events:
                 emit(kind, body)
-        del self.messages[n:]
         self.frames = [json.dumps(m, separators=(",", ":")).encode() for m in self.messages]
 
     @staticmethod
@@ -400,14 +416,17 @@ class Stream:
 # ---- helper processes ----------------------------------------------------------------------
 
 class _Child:
-    """A helper process on a pipe. It reports a port when ready and stops on "stop"."""
+    """A helper process on a pipe, pinned to its role's CPU. `target(pipe, cpu, *args)`
+    pins itself, reports (port, its CPU set) when ready, and stops on "stop"."""
 
-    def __init__(self, target: Callable, *args):
+    def __init__(self, role: str, target: Callable, *args):
         ctx = multiprocessing.get_context("spawn")
         self._pipe, child = ctx.Pipe()
-        self._proc = ctx.Process(target=target, args=(child, *args), daemon=True)
+        cpu = CPUS.get(role)
+        self._proc = ctx.Process(target=target, args=(child, cpu, *args), daemon=True)
         self._proc.start()
-        self.port = self._recv()
+        self.port, affinity = self._recv()
+        assert cpu is None or affinity == {cpu}, f"{role} runs on CPUs {affinity}, not {cpu}"
 
     def _recv(self, timeout: float = 120):
         """The child's next message; an error if it died or hung instead."""
@@ -457,10 +476,11 @@ def _accept_websocket(sock: socket.socket) -> None:
                   f"Connection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").encode())
 
 
-def _send(pipe, frames: list[bytes], offsets: list[int], websocket: bool) -> None:
-    _pin("sender")
+def _send(pipe, cpu: int | None, frames: list[bytes], offsets: list[int],
+          websocket: bool) -> None:
+    _pin(cpu)
     server = socket.create_server(("127.0.0.1", 0))
-    pipe.send(server.getsockname()[1])
+    pipe.send((server.getsockname()[1], _affinity()))
     wire = [_ws_frame(f) for f in frames] if websocket else frames
     while (msg := pipe.recv()) != "stop":  # ("go", limit): one replay per connection
         limit = msg[1]
@@ -504,7 +524,7 @@ class Sender(_Child):
     and `lag()` once it is done."""
 
     def __init__(self, frames: list[bytes], offsets: list[int], websocket: bool = True):
-        super().__init__(_send, frames, offsets, websocket)
+        super().__init__("sender", _send, frames, offsets, websocket)
         self.url = f"ws://127.0.0.1:{self.port}/"
 
     def replay(self, limit: int | None = None) -> None:
@@ -523,10 +543,12 @@ class Recorder:
     t0 + offsets[i]. `frame(payload)` stamps messages that are done when they arrive, in
     order; `hit(i)` stamps item i whenever it finishes (an order's response, say).
     `cpu_ns` is the client's CPU time from t0 to the last item. With `expected` frames,
-    each payload must match its frame."""
+    each payload must match its frame. `warmup` marks an untimed replay."""
 
-    def __init__(self, offsets: Sequence[int], expected: Sequence[bytes] | None = None):
-        self.offsets, self.expected, self.t0, self.i, self.cpu_ns = offsets, expected, 0, 0, 0
+    def __init__(self, offsets: Sequence[int], expected: Sequence[bytes] | None = None,
+                 warmup: bool = False):
+        self.offsets, self.expected, self.warmup = offsets, expected, warmup
+        self.t0, self.i, self.cpu_ns = 0, 0, 0
         self.lat = array("q", bytes(8 * len(offsets)))
 
     @property
@@ -585,16 +607,16 @@ class Replay:
 def replay(candidates: dict[str, Callable[[str, Recorder], None]], frames: list[bytes],
            offsets: list[int], rounds: int | None = None, websocket: bool = True) -> Replay:
     """Each candidate connects to a `Sender` and consumes a replay of `frames` at
-    `offsets`: once untimed as warm-up (the first 1,000 frames), then `rounds` times in
+    `offsets`: once untimed as warm-up (the first `WARMUP` frames), then `rounds` times in
     rotating order, pooled. The client side runs pinned apart from the sender."""
     names, rounds = list(candidates), rounds or default_rounds(len(candidates))
     lat, cpu, lags = {name: array("q") for name in names}, dict.fromkeys(names, 0), array("q")
-    warmup = min(1000, len(offsets))
+    warmup = min(WARMUP, len(offsets))
     with _pinned("client"), Sender(frames, offsets, websocket) as sender:
         for r in range(-1, rounds):
             for name in rotated(names, max(r, 0)):
                 rec = Recorder(offsets[:warmup] if r < 0 else offsets,
-                               frames if VERIFY and websocket else None)
+                               frames if VERIFY and websocket else None, warmup=r < 0)
                 sender.replay(warmup if r < 0 else None)
                 candidates[name](sender.url, rec)
                 assert rec.done, f"{name} stopped after {rec.i} of {len(rec.offsets)} items"
@@ -708,10 +730,10 @@ def _order_protocol() -> type[asyncio.Protocol]:
     return OrderProtocol
 
 
-def _serve(pipe, cert: str, key: str) -> None:
+def _serve(pipe, cpu: int | None, cert: str, key: str) -> None:
     import uvloop
 
-    _pin("server")
+    _pin(cpu)
     ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     ctx.load_cert_chain(cert, key)
     ctx.set_alpn_protocols(["h2", "http/1.1"])
@@ -722,7 +744,7 @@ def _serve(pipe, cert: str, key: str) -> None:
         stop = loop.create_future()
         loop.add_reader(pipe.fileno(), lambda: stop.done() or stop.set_result(None))
         server = await loop.create_server(protocol, "127.0.0.1", 0, ssl=ctx)
-        pipe.send(server.sockets[0].getsockname()[1])
+        pipe.send((server.sockets[0].getsockname()[1], _affinity()))
         await stop
         server.close()
 
@@ -736,7 +758,7 @@ class OrderServer(_Child):
     def __init__(self):
         self._dir = tempfile.TemporaryDirectory()
         self.cert, key = _self_signed(Path(self._dir.name))
-        super().__init__(_serve, str(self.cert), str(key))
+        super().__init__("server", _serve, str(self.cert), str(key))
         self.url = f"https://127.0.0.1:{self.port}{ORDER_PATH}"
 
     def ssl_context(self) -> ssl.SSLContext:
