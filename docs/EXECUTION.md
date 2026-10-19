@@ -32,15 +32,16 @@ slower than the heap, in CPython. It wins on the properties that matter at scale
 - It lists levels best-first without sorting, which snapshots and depth checks need.
 - Tens of nanoseconds are noise next to a network round trip measured in milliseconds.
 
-P1's stage costs bound what a Rust book could save; P2 measures it (Hot path, below).
+P1's stage costs bound what a Rust book could save; P2 measures it (Hot path, below:
+P1 is the pure-Python hot path, P2 the book in Rust, P3 NautilusTrader).
 
 ## Hot path (measured in M4)
 
 Every script in `benchmarks/` but book.py ran three times at commit e20d5df on one host:
 a cloud VM, Linux 6.18 (Firecracker guest), Intel Xeon @ 2.10 GHz, 4 vCPUs, CPython
-3.13.16, with gc_pauses also once on 3.14.6 and 3.14.6t. The command and the raw outputs,
-each with its platform header and package versions, are in `runs/m4-benchmarks/`
-(`plan.md`). Tables give the median of the three runs.
+3.13.16, with gc_pauses also once on 3.14.6 and 3.14.6t. The command and the raw
+outputs, each with its platform header and package versions, are in
+`runs/m4-benchmarks/` (`plan.md`). Tables give the median of the three runs.
 
 ### Method
 
@@ -61,14 +62,14 @@ each with its platform header and package versions, are in `runs/m4-benchmarks/`
   mid-replay, as after a resubscribe. Orders use their own schedules (below).
 - **Fair comparison.** Candidates run in rotated rounds, each first equally often, after
   an untimed warm-up, and samples are pooled. Sender, client and order server are pinned
-  to separate cores.
+  to separate cores, as the guest OS reports them (a VM can't see its host's).
 - **Host noise.** The hypervisor steals 0.2–0.8% of CPU time, in stalls of up to
   hundreds of ms. Each output prints the harness floor (a no-op) or the sender's own lag
   next to its rows; their max reached 373 ms once. Across the three runs, most CPU and
-  p50 figures varied within ±10%, and some p99s and p99.9s several-fold. Every comparison
-  below holds in each run. **Compare on CPU per item and p50**, use p99 only where the
-  gap is large, and read p99.9 and max as host-bound. Rerun on dedicated hardware for
-  the tails.
+  p50 figures varied within ±10%, and some p99s and p99.9s several-fold. Every
+  comparison below holds in each run. **Compare on CPU per item and p50**, use p99 only
+  where the gap is large, and read p99.9 and max as host-bound. Rerun on dedicated
+  hardware for the tails.
 
 ### Decoding (`decode.py`)
 
@@ -83,9 +84,10 @@ mean 32 µs, p50 4.2 µs):
 | msgspec untyped | 7,483 | 1,049 | 988 | 1,347 | 78 | 14.6 |
 | **msgspec typed structs (chosen)** | 6,974 | 559 | 570 | 845 | 76 | 13.8 |
 
-Typed structs are fastest on every message type: 1.9× orjson on deltas, and 6.2× stdlib
-json. They also validate the schema while decoding, and with `gc=False` they are objects
-the collector never tracks (see GC).
+Typed structs are fastest on deltas, trades and fills in every run, and on snapshots in
+two of three: 1.9× orjson on deltas, and 6.2× stdlib json. They also validate the schema
+while decoding, and with `gc=False` they are objects the collector never tracks (see
+GC).
 
 ### Signing (`sign.py`)
 
@@ -96,8 +98,9 @@ the collector never tracks (see GC).
 
 The open loop pools every order of a schedule of Poisson 200/s plus 20 orders at once
 every 500 ms. RSA costs 10.3× as much in a hot loop, so a 20-order requote spends about
-8 ms on signatures. Signing between other work costs 1.3× the hot loop; after an idle
-gap, 2×. **The trading key should be Ed25519.**
+8 ms on signatures. An Ed25519 signature between other work costs 1.3× the hot loop, and
+after an idle gap 2×; the gap adds 40–70 µs on either key. **The trading key should be
+Ed25519.**
 
 ### Event loop and WebSocket client (`ws_clients.py`)
 
@@ -121,8 +124,8 @@ websockets and aiohttp put between the socket and the caller.
 | bare reader, queue hop / uvloop | 44.4 | 30.1 | 69.1 | 333 |
 
 - uvloop saves 6–15 µs of CPU per frame, 14–34% depending on the client.
-- The queue hop costs 9–15 µs per frame and doubles the bursty p50, more than the loop
-  choice does.
+- The queue hop costs 9–15 µs per frame and doubles the bursty p50; on bursty p50 it
+  matters more than the loop choice.
 - picows on uvloop costs what the bare reader does, so the client adds almost nothing.
   It uses 41–43% of the incumbent's CPU per frame, and its bursty p50 is a sixth of the
   incumbent's.
@@ -155,34 +158,34 @@ CloudFront's handling of HTTP/2 can't be simulated locally.
 
 ### Garbage collector (`gc_pauses.py`)
 
-| interpreter, heap held | one full collection | after `gc.freeze()` | full collection every (json dicts kept) | longest full pause while 1M+ containers are kept | the same after freeze |
+| interpreter, heap held | one full collection | after `gc.freeze()` | full collection every (json dicts kept) | longest full pause while the heap grows by half (≥200k containers) | the same after freeze |
 |---|--:|--:|--:|--:|--:|
-| 3.13, interpreter only (52k tracked) | 9.4 ms | 0.0 ms | 6.5 s | none (200k kept) | none |
+| 3.13, interpreter only (52k tracked) | 9.4 ms | 0.0 ms | 6.5 s | none | none |
 | 3.13, + 1M dicts (2.05M tracked) | 421 ms | 0.0 ms | 257 s | 454 ms | 39 ms (3 of them) |
 | 3.14, + 1M dicts (3.06M tracked), one run | 459 ms | 0.0 ms | 191 s | 532 ms | 93 ms (5 of them) |
 | 3.14t free-threaded, + 1M dicts (3.07M tracked), one run | 163 ms | 86 ms | 192 s | 202 ms | none |
 
 - **When full collections come.** CPython collects in full once its long-lived
-  containers have grown by a quarter since the last full collection. 3.14.6 is
-  generational like 3.13: its gc.callbacks report young, middle and full passes, and a
-  full one lands at the same point. A process that keeps its decoded dict messages (a
-  tape, a history) therefore stalls for a whole-heap collection every few minutes. With
-  a large heap that takes 0.4–0.5 s. A kept dict message adds 1.0 tracked container on
-  3.13 and 2.0 on 3.14; `gc=False` structs keep nothing the collector tracks, so they
-  never move it.
+  containers have grown by a quarter since the last full collection. 3.14.6 behaves as
+  3.13 here: its growth test ran 764 collections, one of them full. A process that keeps
+  its decoded dict messages (a tape, a history) therefore stalls for a whole-heap
+  collection every few minutes. With a large heap that takes 0.4–0.5 s. A kept dict
+  message adds 1.0 tracked container on 3.13 and 2.0 on 3.14; `gc=False` structs keep
+  nothing the collector tracks, so they never move it.
 - **What freeze does.** It takes the heap out of every collection, but kept containers
   still accumulate. After freeze, the quarter is measured against the unfrozen
   survivors, which are few, so full collections come more often but walk only what was
   kept since: 3 of up to 39 ms instead of one of 454 ms on 3.13, and in total 111 ms
-  instead of 495 ms. On 3.14t, freeze only halves a full collection (163 to 86 ms).
+  instead of 495 ms. On 3.14t, freeze only halves an explicit full collection (163 to 86
+  ms), though its growth test then triggered none.
 - **In the replays,** each starting right after a full collection, the only pauses were
   young ones: 44 per 40,000 kept dict messages, at most 0.25 ms with the large heap and
   0.7 ms without, and none for structs. The settings differed only by noise.
 
 **Call `gc.freeze()` once startup state is loaded, keep the hot path on `gc=False`
 structs, and leave the collector enabled** (disabling it lets any accidental cycle
-leak). Free-threading brings nothing to this single-threaded hot path, and with freeze
-its collector is the weaker one.
+leak). Free-threading brings nothing to this single-threaded hot path, and a forced full
+collection there stays costly after freeze.
 
 ### P1: the pure-Python hot path (`hot_path.py`)
 
@@ -191,7 +194,8 @@ buy at the ask when a market's ask first drops a tick below its first snapshot's
 fired 135 times per 10,000 frames over 50 markets, 286 over the reconnect's 500. Each
 order is signed, serialized and POSTed to the local TLS server without blocking the
 feed, and both stacks must make identical decisions.
-- **Incumbent:** asyncio, websockets via `kalshi.ws.Connection`, json, `BookFeed`, httpx.
+- **Incumbent:** asyncio, websockets via `kalshi.ws.Connection`, json, `BookFeed`,
+  httpx.
 - **P1:** the chosen row of each table above: uvloop, picows, msgspec structs into
   `StructFeed` (the same `OrderBook`), Ed25519, aiohttp, and `gc.freeze()`.
 
@@ -213,37 +217,38 @@ feed, and both stacks must make identical decisions.
 Bursts are 200 frames, and the reconnect's is the 500 snapshots, one per replay. The
 p99.9s swung between runs: P1's was 3.6, 3.7 and 20 ms bursty, and 2.5–145 ms steady.
 - **Against the incumbent,** P1 cuts CPU per frame 2.1× steady and 2.3× bursty, and
-  tick-to-order 1.3× steady and 4.0× bursty. It drains a 200-frame burst in 1.9 ms
-  (9.5 µs a frame) against 4.2 ms.
+  tick-to-order 1.3× steady and 4.0× bursty. It drains a 200-frame burst in 1.9 ms (9.5
+  µs a frame) against 4.2 ms.
 - **Where a bursty frame's 45.8 µs of CPU goes:**
   - picows on uvloop: 21.1 µs (`ws_clients.py`);
   - decode and book: 2.6 and 10.7 µs (means);
-  - signing and POSTing 1.35 orders per 100 frames: about 7.7 µs;
+  - deciding, signing and POSTing 1.35 orders per 100 frames: about 7.7 µs;
   - the rest, about 4 µs: the stack's own overhead and its timing.
-- **Decide + sign** costs 110–140 µs per order, 3–3.5× signing's hot-loop figure,
-  while `sign.py` puts signing between other work at 1.3×. Deciding and encoding the
-  body add a few µs, and the rest of the gap is unexplained.
+- **Decide + sign** costs 110–140 µs per order, 2.8–3.5× signing's hot-loop figure, well
+  above `sign.py`'s in-context figure. Deciding and encoding the body add a few µs, and
+  the rest of the gap is unexplained.
 - **Steady costs more per frame than bursty:** each frame wakes the process alone, and
   decode and book double.
 - **A reconnect is the worst case measured.** 500 snapshots at once take P1 76 ms to
-  drain (152 µs a snapshot, nearly all of it building books from up to hundreds of
-  price and size strings each), and every frame behind them waits.
+  drain (152 µs a snapshot, nearly all of it building books from up to hundreds of price
+  and size strings each), and every frame behind them waits.
 
 ### Provisional reading, from P1 alone
 
-The plan's decision rule compares the hot path's p99.9 under bursts with the end-to-end
-p99.9 (the order round trip). It is provisional until the Linux us-east-2 run gives both
-on the trading host.
+The decision rule: Python holds if the hot path's p99.9 under bursts is small against
+the end-to-end p99.9 (the order round trip), and a native stage is worth its cost only
+where it moves the end-to-end p99.9. This reading is provisional until the Linux
+us-east-2 run gives both on the trading host.
 
 - **Under the synthetic bursts, Python holds.** P1's bursty p99.9 is 3.7 ms (20 ms in
-  one run of three, on this noisy host). The round trip from Azure East US is 12–17 ms
-  (Hosting); from us-east-2 it isn't measured yet.
+  one run of three, on this noisy host), against the round trips in Hosting (Azure East
+  US costed; us-east-2 not yet measured).
 - **A Rust book's saving inside a delta burst is about 1 ms.** Decode and book are about
   6.5 µs of the 9.5 µs a burst frame costs, so a native book would bring a 200-frame
   burst's last frame from 1.9 ms toward 1 ms.
 - **The reconnect is where it could matter.** Its 76 ms drain, and 85 ms p99.9, are
-  mostly book building, which native code does in a fraction of the time. That exceeds
-  any round trip we expect.
+  mostly book building, which native code likely does in a fraction of the time. That
+  exceeds any round trip we expect.
 
 What M4 still needs before deciding:
 - P2: the book in Rust via PyO3, and a native-strategy upper bound (the whole hot path
