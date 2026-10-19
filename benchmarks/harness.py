@@ -371,6 +371,8 @@ class Stream:
     SIDS = {"orderbook_snapshot": 1, "orderbook_delta": 1, "trade": 2, "fill": 3}
 
     def __init__(self, n: int, markets: int = 50, depth: int = 100, seed: int = 1):
+        if n < markets:
+            raise ValueError(f"{n} frames can't hold {markets} markets' snapshots")
         rng = random.Random(seed)
         self.markets = [_Market(rng, f"KXSYN{i:03d}-26OCT20-B{50 + i}.5",
                                 rng.randint(10, depth)) for i in range(markets)]
@@ -426,7 +428,9 @@ class _Child:
         self._proc = ctx.Process(target=target, args=(child, cpu, *args), daemon=True)
         self._proc.start()
         self.port, affinity = self._recv()
-        assert cpu is None or affinity == {cpu}, f"{role} runs on CPUs {affinity}, not {cpu}"
+        if cpu is not None and affinity != {cpu}:
+            self._proc.kill()
+            raise RuntimeError(f"{role} runs on CPUs {affinity}, not {cpu}")
 
     def _recv(self, timeout: float = 120):
         """The child's next message; an error if it died or hung instead."""
