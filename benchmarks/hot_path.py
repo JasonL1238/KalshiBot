@@ -127,7 +127,7 @@ class Stack:
     async def drain(self, timeout: float = 30) -> None:
         """Wait for every order in flight; raise if one failed or hung."""
         if pending := [t for t in self.tasks if not t.done()]:
-            done, late = await asyncio.wait(pending, timeout=timeout)
+            _, late = await asyncio.wait(pending, timeout=timeout)
             assert not late, f"{len(late)} orders unanswered after {timeout} s"
         for task in list(self.tasks):
             task.result()

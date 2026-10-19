@@ -185,9 +185,10 @@ were young-generation ones: 44 per 40,000 kept dict messages and 4 for structs, 
 0.15–0.6 ms except one of 1.8 ms. With the 1M-dict heap and dicts kept, default also had
 the highest p50 in all three runs (88–94 µs, against 78–86 for freeze), a gap the
 measured pauses don't explain. Otherwise the settings differed only by host noise. On
-3.14t a full collection did land in one replay, a 12 ms pause (that table's larger tails
-are host stalls, which one 12 ms pause can't produce). There freeze only halves a full
-collection, though an unfrozen one is faster than on 3.14. **Call `gc.freeze()` once
+3.14t a full collection did land in one replay, a 12 ms pause. That row's larger tails
+(up to 218 ms) and p50 (115 µs, against 82–87) are unexplained: one 12 ms pause can't
+produce them, and they exceed any host stall seen elsewhere (≤43 ms). There freeze only
+halves a full collection, though an unfrozen one is faster than on 3.14. **Call `gc.freeze()` once
 startup state is loaded, keep the hot path on `gc=False` structs, and leave the
 collector enabled** (disabling it lets any accidental cycle leak). Free-threading brings
 nothing to this single-threaded hot path, and with freeze its collector is the weaker
