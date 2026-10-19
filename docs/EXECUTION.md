@@ -176,8 +176,8 @@ CloudFront's handling of HTTP/2 can't be simulated locally.
   still accumulate. After freeze, the quarter is measured against the unfrozen
   survivors, which are few, so full collections come more often but walk only what was
   kept since: 3 of up to 39 ms instead of one of 454 ms on 3.13, and in total 111 ms
-  instead of 495 ms. On 3.14t, freeze only halves an explicit full collection (163 to 86
-  ms), though its growth test then triggered none.
+  instead of 495 ms. On 3.14t, freeze only halves an explicit full collection (163 to
+  86 ms), though its growth test then triggered none.
 - **In the replays,** each starting right after a full collection, the only pauses were
   young ones: 44 per 40,000 kept dict messages, at most 0.25 ms with the large heap and
   0.7 ms without, and none for structs. The settings differed only by noise.
@@ -217,8 +217,8 @@ feed, and both stacks must make identical decisions.
 Bursts are 200 frames, and the reconnect's is the 500 snapshots, one per replay. The
 p99.9s swung between runs: P1's was 3.6, 3.7 and 20 ms bursty, and 2.5–145 ms steady.
 - **Against the incumbent,** P1 cuts CPU per frame 2.1× steady and 2.3× bursty, and
-  tick-to-order 1.3× steady and 4.0× bursty. It drains a 200-frame burst in 1.9 ms (9.5
-  µs a frame) against 4.2 ms.
+  tick-to-order 1.3× steady and 4.0× bursty. It drains a 200-frame burst in 1.9 ms
+  (9.5 µs a frame) against 4.2 ms.
 - **Where a bursty frame's 45.8 µs of CPU goes:**
   - picows on uvloop: 21.1 µs (`ws_clients.py`);
   - decode and book: 2.6 and 10.7 µs (means);
