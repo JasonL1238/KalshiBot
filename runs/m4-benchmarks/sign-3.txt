@@ -1,0 +1,17 @@
+sign: request signing for an order POST
+platform: Linux-6.18.44-fc-v139-x86_64-with-glibc2.39, Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs
+python: CPython 3.13.16
+packages: cryptography 50.0.2
+replay processes pinned to CPUs sender 0, client 1, server 2 (separate cores, as the OS reports them; a VM can't see its host's)
+
+OpenSSL: OpenSSL 4.0.3 29 Sep 2026
+
+µs per signed request       hot loop             after 1 ms idle   after decoding 100 frames
+Ed25519                         55.3                        79.1                        55.2
+RSA-2048 PSS                   454.4                       499.7                       662.7
+
+open-loop replay (Poisson 200/s + 20 at once every 500 ms), 10,000 orders, host CPU steal 0.3%
+key type                                 n    mean µs        p50        p99      p99.9        max
+(harness floor)                      9,996        5.3        0.9       30.7          —     3149.4
+Ed25519                              9,996      178.0       73.3     1032.6          —    59949.1
+RSA-2048 PSS                         9,996     1269.8      462.3     8951.2          —    12436.5
