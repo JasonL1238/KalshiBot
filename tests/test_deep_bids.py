@@ -98,21 +98,50 @@ def bids(intents: pd.DataFrame, ticker: str) -> pd.Series:
     ("KXNHLGAME-25OCT25NYRBOS", "2025-10-25 04:30", 14, True),  # 00:30 EDT, expires 23:30 EST
     ("KXNHLGAME-26NOV05NYRBOS", "2026-11-06 00:00", 2, True),
     ("KXMLBGAME-26OCT151905NYYTOR", "2026-10-15 23:05", 3, True),  # MLB's adds the time
-    ("KXMLBGAME-26OCT30LADTOR", "2026-10-30 04:30", 3, True),  # 00:30 EDT, expires 23:30 EST
+    ("KXMLBGAME-26SEP221305TBNYYG1", "2026-09-22 17:05", 3, True),  # a doubleheader's first
+    ("KXMLBGAME-26OCT300030LADTOR", "2026-10-30 04:30", 3, True),  # 00:30 EDT, expires 23:30 EST
     ("KXNCAAMBGAME-27MAR13GONSMC", "2027-03-14 04:30", 2, True),  # 23:30 EST, 00:30 EDT
-    ("KXNHLGAME-27JAN05NYRBOS", "2027-01-06 00:00", 14, False),  # 2025's offset in 2027
+    # one row per league and offset, whatever the game's year: 14-day listings ran into 2026
+    ("KXNCAAMBGAME-26JAN05DUKUNC", "2026-01-06 00:00", 14, True),
+    ("KXWNBAGAME-26JUL05LVANYL", "2026-07-05 23:00", 14, True),
+    ("KXWNBAGAME-26AUG18LACONN", "2026-08-18 23:00", 2, True),
     ("KXNCAAMBGAME-27JAN05DUKUNC", "2027-01-06 00:00", 3, False),  # MLB's offset
+    ("KXMLBGAME-27APR061905NYYTOR", "2027-04-06 23:05", 2, False),  # and the others' for MLB
     ("KXMLBGAME-25OCT02LADSDP", "2025-10-02 23:00", 730, False),  # a season ahead
     ("KXNHLGAME-OCT2NJDPHI", "2025-10-02 23:00", 14, False),  # no date
     ("KXNHLGAME-25FEB30NJDPHI", "2025-03-02 23:00", 14, False),  # no such date
 ])
-def test_the_listed_start_is_expiration_less_its_leagues_offset_in_its_era(event, start, offset,
-                                                                          registered):
+def test_the_listed_start_is_expiration_less_one_of_its_leagues_offsets(event, start, offset,
+                                                                        registered):
     """The DST rows: the expiration's Eastern date is a day off the offset, the start's isn't."""
     markets = pd.DataFrame({"event_ticker": [event], "series_ticker": [event.split("-")[0]],
                             "latest_expiration_time": [T(start) + timedelta(days=offset)]})
     got = deep_bids._listed_start(markets).iloc[0]
     assert got == T(start) if registered else pd.isna(got)
+
+
+def test_a_tickers_own_time_is_the_start_where_the_expiration_counts_from_a_placeholder():
+    events = ["KXMLBGAME-26APR161235WSHPIT", "KXMLBGAME-26APR161000WSHPIT",
+              "KXMLBGAME-26SEP221305TBNYYG2", "KXMLBGAME-26APR16WSHPIT"]
+    markets = pd.DataFrame({"event_ticker": events, "series_ticker": "KXMLBGAME",
+                            # 10:00 EDT plus 3 days, as Kalshi listed the 2026 season's opening
+                            "latest_expiration_time": T("2026-04-16 14:00") + timedelta(3)})
+    markets.loc[2, "latest_expiration_time"] = T("2026-09-22 14:00") + timedelta(3)
+    assert deep_bids._listed_start(markets).tolist() == [
+        T("2026-04-16 16:35"), T("2026-04-16 14:00"), T("2026-09-22 17:05"),
+        T("2026-04-16 14:00")]  # without a time, the placeholder is all there is
+
+
+def test_two_offsets_that_could_both_give_a_start_are_refused(monkeypatch):
+    """A day apart, both land on the game's Eastern date when the clocks fall back."""
+    monkeypatch.setitem(deep_bids.LEAGUES, "KXNHLGAME",
+                        deep_bids.LEAGUES["KXNHLGAME"]._replace(offsets=(2, 3)))
+    markets = pd.DataFrame({"event_ticker": ["KXNHLGAME-26NOV01NYRBOS"],
+                            "series_ticker": ["KXNHLGAME"],
+                            # 00:30 EDT, expiring 3 days on
+                            "latest_expiration_time": [T("2026-11-01 04:30") + timedelta(3)]})
+    with pytest.raises(ValueError, match="KXNHLGAME-26NOV01NYRBOS"):
+        deep_bids._listed_start(markets)
 
 
 def test_listings_without_a_registered_start_are_logged_and_get_no_bids(tape, caplog):

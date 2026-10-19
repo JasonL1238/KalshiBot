@@ -10,11 +10,12 @@ rests at a time.
 - Universe: the game-winner series in `LEAGUES`, in events that show exactly two markets,
   mutually exclusive, at the decision.
 - Live: from the game's listed start until its league's cap. No as-listed column gives
-  the start: `latest_expiration_time` is the start plus a whole number of 24-hour days,
-  set by the league and the era of the game's date (the event ticker's YYMONDD, US
-  Eastern), and a start counts only if its Eastern date is the ticker's. Listings with
-  another offset (a season ahead: 730 days) or no date in the ticker get no bids; their
-  count is logged.
+  the start. A listing counts only if `latest_expiration_time` less one of its league's
+  offsets (`League.offsets`, whole 24-hour days) lands on the game's Eastern date (the
+  event ticker's YYMONDD). Its start is then the ticker's own time where it gives one
+  (YYMONDDHHMM, US Eastern; Kalshi's expirations sometimes count from a placeholder
+  hour), and that landing point otherwise. Listings with no offset landing (a 730-day
+  expiration) or no date in the ticker get no bids; their count is logged.
 - Reference: the market's last instant (one created_time, block trades aside) in the
   `max_hold` before the tick, priced where it ended: its highest YES price if takers
   bought YES, its lowest if they sold, the middle of its range if both. No print, no bid.
@@ -36,22 +37,20 @@ log = logging.getLogger(__name__)
 PRICE_CENT = PRICE_SCALE // 100
 MIN_LIMIT = 2 * PRICE_CENT
 EASTERN = "America/New_York"
+TICKER = r"^[^-]+-(\d\d[A-Z]{3}\d\d)(\d{4})?"  # an event ticker's game date, and time if given
 
 
 class League(NamedTuple):
     cap: timedelta  # how long after its listed start a game is live
-    before_2026: int  # days from start to latest expiration, games dated before ERA_2026
-    from_2026: int
+    offsets: tuple[int, ...]  # whole days from start to latest_expiration_time; each is tried
 
 
-# The first game date of the 2026 listings (the H8 gate count: 14-day offsets through 2025)
-ERA_2026 = pd.Timestamp("2026-01-01")
 # The universe, provisional until registration fixes the leagues by its rule.
 LEAGUES = {
-    "KXMLBGAME": League(timedelta(hours=5), 14, 3),
-    "KXNCAAMBGAME": League(timedelta(hours=3), 14, 2),
-    "KXNHLGAME": League(timedelta(hours=3, minutes=30), 14, 2),
-    "KXWNBAGAME": League(timedelta(hours=3), 14, 2),
+    "KXMLBGAME": League(timedelta(hours=5), (14, 3)),
+    "KXNCAAMBGAME": League(timedelta(hours=3), (14, 2)),
+    "KXNHLGAME": League(timedelta(hours=3, minutes=30), (14, 2)),
+    "KXWNBAGAME": League(timedelta(hours=3), (14, 2)),
 }
 
 
@@ -114,18 +113,26 @@ class DeepBids:
 
 def _game_day(markets: pd.DataFrame) -> pd.Series:
     """The date in each market's event ticker (US Eastern, naive); NaT without one."""
-    return pd.to_datetime(markets["event_ticker"].str.extract(
-        r"^[^-]+-(\d\d[A-Z]{3}\d\d)", expand=False), format="%y%b%d", errors="coerce")
+    return pd.to_datetime(markets["event_ticker"].str.extract(TICKER)[0], format="%y%b%d",
+                          errors="coerce")
 
 
 def _listed_start(markets: pd.DataFrame) -> pd.Series:
-    """Each market's listed start (module docstring, Live); NaT without a registered one."""
-    day = _game_day(markets)
-    series = markets["series_ticker"]
-    offset = series.map({s: lg.from_2026 for s, lg in LEAGUES.items()}).where(
-        day >= ERA_2026, series.map({s: lg.before_2026 for s, lg in LEAGUES.items()}))
-    start = markets["latest_expiration_time"] - pd.to_timedelta(offset, unit="D")
-    return start.where(start.dt.tz_convert(EASTERN).dt.tz_localize(None).dt.normalize() == day)
+    """Each market's listed start (module docstring, Live); NaT without a registered one.
+    Raises if two of a league's offsets give one listing a start."""
+    parts = markets["event_ticker"].str.extract(TICKER)
+    given = pd.to_datetime(parts[0] + parts[1], format="%y%b%d%H%M", errors="coerce")
+    rows = markets.assign(
+        offset=markets["series_ticker"].map({s: lg.offsets for s, lg in LEAGUES.items()}),
+        day=_game_day(markets), given=given.dt.tz_localize(
+            EASTERN, ambiguous="NaT", nonexistent="NaT").dt.tz_convert("UTC")).explode("offset")
+    lands = rows["latest_expiration_time"] - pd.to_timedelta(rows["offset"], unit="D")
+    on_day = lands.dt.tz_convert(EASTERN).dt.tz_localize(None).dt.normalize() == rows["day"]
+    start = rows["given"].fillna(lands)[on_day]
+    if (twice := start.index.duplicated()).any():
+        raise ValueError("two of a league's offsets give these listings a start: "
+                         f"{list(markets.loc[start.index[twice], 'event_ticker'].unique())}")
+    return start.reindex(markets.index)
 
 
 def _live(markets: pd.DataFrame, start: datetime, end: datetime,
