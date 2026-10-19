@@ -380,16 +380,16 @@ GRID = [  # (label, worlds, one_world settings); no edge unless the label says s
      "lasting days (φ = 0.8)", 2000, {**MAKERS_STRESS, "shock": 0.3, "persistence": 0.8}),
     ("makers (held out): NO bids 5–25¢ below the truth, 16 sweeps and news, shock ρ = 0.5 "
      "lasting days (φ = 0.8)", 2000, {**MAKERS, "news": 0.1, "shock": 0.5, "persistence": 0.8}),
-    # held out from the H1 method's choice (`--only H1-shaped` skips them), seeds fixed first
-    ("held out, H1-shaped: H1's NO cutoffs, half spread 1¢, shock ρ = 0.5 lasting days "
+    # held out from the H1 method's choice (`--only "H1-shaped:"` skips them), seeds fixed first
+    ("H1-shaped (held out): H1's NO cutoffs, half spread 1¢, shock ρ = 0.5 lasting days "
      "(φ = 0.8)", 2000, {**H1_SHAPED, "shock": 0.5, "persistence": 0.8}),
-    ("held out, H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, binaries only, shock "
+    ("H1-shaped (held out): NO at YES ≤ 20¢ only, half spread 0.5¢, binaries only, shock "
      "ρ = 0.3 lasting days (φ = 0.5)", 2000,
      {**H1_COUPLED, "bucket_share": 0.0, "shock": 0.3, "persistence": 0.5}),
-    ("held out, H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, ladders all strike "
+    ("H1-shaped (held out): NO at YES ≤ 20¢ only, half spread 0.5¢, ladders all strike "
      "ladders, shock ρ = 0.5 lasting days (φ = 0.8)", 2000,
      {**H1_COUPLED, "strike_share": 1.0, "shock": 0.5, "persistence": 0.8}),
-    ("held out, H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, noisier signals (σ = 1), "
+    ("H1-shaped (held out): NO at YES ≤ 20¢ only, half spread 0.5¢, noisier signals (σ = 1), "
      "shock ρ = 0.5 lasting days (φ = 0.8)", 2000,
      {**H1_COUPLED, "signal": 1.0, "shock": 0.5, "persistence": 0.8}),
 ]
@@ -483,7 +483,7 @@ PREDICTION_GRID = [  # (label, worlds, one_world settings): edges on every contr
     ("H1-shaped: 1¢ lower asks, NO at YES ≤ 20¢ only, half spread 0.5¢, shock ρ = 0.5 "
      "lasting days (φ = 0.8)", 300, {**H1_COUPLED, "edge": synthetic.Edge(0.0, 1.0, 1),
                                     "shock": 0.5, "persistence": 0.8}),
-    ("held out, H1-shaped: 0.75¢ lower asks, NO at YES ≤ 20¢ only, half spread 0.5¢, shock "
+    ("H1-shaped (held out): 0.75¢ lower asks, NO at YES ≤ 20¢ only, half spread 0.5¢, shock "
      "ρ = 0.3 lasting days (φ = 0.5)", 300, {**H1_COUPLED, "edge": synthetic.Edge(0.0, 1.0, 0.75),
                                             "shock": 0.3, "persistence": 0.5}),
 ]
@@ -495,21 +495,33 @@ PREDICTION_HEADER = ("| Edge world | true net edge per position | widening | pow
 def _calibration(results: list[dict[str, float]]) -> str:
     """'predicted / measured' power at α/m, in %, over `results`; bold where predicted
     exceeds measured by more than 2 Monte Carlo standard errors of their per-world
-    difference (the pass rule, docs/BACKTESTING.md step 6): the larger of the sample one
-    and the Bernoulli one under a calibrated prediction, √(Σ p(1 − p))/n, which can't
-    collapse when the gauntlet rejects in no world (runs/h1-revision/candidates.md). ‡
-    marks a cell only the sample one would put in bold."""
+    difference (the pass rule, docs/BACKTESTING.md step 6) and as few rejections as
+    measured have less than a one-sided 2σ chance under the per-world predictions
+    (`_at_most`). ‡ marks a cell only the first would put in bold."""
     if len(results) < 2:
         return "–"
     predicted = np.array([s["power_predicted"] for s in results])
     found = np.array([PROCEDURES["gauntlet"](s, GATES.level) for s in results], dtype=float)
     gap = predicted - found
     text = f"{100 * predicted.mean():.1f} / {100 * found.mean():.1f}"
-    sample = gap.std(ddof=1) / np.sqrt(len(gap))
-    bernoulli = np.sqrt((predicted * (1 - predicted)).sum()) / len(gap)
-    if gap.mean() > 2 * max(sample, bernoulli):
-        return f"**{text}**"
-    return f"{text} ‡" if gap.mean() > 2 * sample else text
+    if gap.mean() <= 2 * gap.std(ddof=1) / np.sqrt(len(gap)):
+        return text
+    # and so few rejections are unlikely (one-sided 2σ) if each world's prediction is right
+    unlikely = _at_most(predicted, int(found.sum())) < CALIBRATION_TAIL
+    return f"**{text}**" if unlikely else f"{text} ‡"
+
+
+CALIBRATION_TAIL = scipy_stats.norm.cdf(-2)  # one-sided 2σ
+
+
+def _at_most(p: np.ndarray, k: int) -> float:
+    """P(K ≤ k) for K a sum of independent Bernoulli(p_i) (Poisson binomial), exactly."""
+    dist = np.zeros(k + 2)
+    dist[0] = 1.0
+    for q in p:
+        dist[1:] = dist[1:] * (1 - q) + dist[:-1] * q
+        dist[0] *= 1 - q
+    return float(dist[:k + 1].sum())
 
 
 def prediction_report(scale: float = 1.0, only: str = "", repeated: str = "") -> str:

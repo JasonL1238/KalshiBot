@@ -212,14 +212,18 @@ def _null(d: Positions, p: Positions, rng: np.random.Generator, gates: Gates
 
 def _repeated(p: Positions, gates: Gates) -> dict:
     """`null._clusters`' repeated for `p` under `gates.repeated`: the clusters where a
-    taker buys one contract at more than one time (H1's decisions), or none."""
+    taker buys one contract at more than one time (H1's decisions, or any family's), and
+    no maker fills share them; or none. Every position of such a cluster is revised,
+    including a one-time buy of another of its contracts."""
     if gates.repeated == "nested" or p.contract is None or p.order is None:
         return {}
     taker = np.ones(len(p.day), bool) if p.maker is None else ~p.maker
     key = pd.DataFrame({"cluster": p.cluster, "contract": p.contract, "order": p.order})[taker]
     times = key.groupby(["cluster", "contract"])["order"].nunique()
     hit = times[times > 1].index.get_level_values("cluster").unique()
-    rows = taker & np.isin(p.cluster, hit)
+    if p.maker is not None:
+        hit = hit.difference(np.unique(p.cluster[p.maker]))
+    rows = np.isin(p.cluster, hit)
     if not rows.any():
         return {}
     exclusive = np.zeros(len(p.day), bool) if p.exclusive is None else p.exclusive

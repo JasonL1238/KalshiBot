@@ -318,10 +318,13 @@ def test_power_against_a_large_edge():
     assert conformance.rates(results, conformance.GATES.level)["gauntlet"] >= 0.85
 
 
-def test_calibration_counts_the_bernoulli_error_when_no_world_rejects():
-    """No rejection in 300 worlds against a 0.7% prediction is no evidence of bias: the
-    sample error collapses, the Bernoulli one doesn't."""
-    results = [{"power_predicted": 0.007 + 0.0001 * (i % 3), "p_value": 1.0} for i in range(300)]
-    assert conformance._calibration(results).endswith("‡")
-    biased = [{"power_predicted": 0.85, "p_value": 0.0 if i < 220 else 1.0} for i in range(300)]
-    assert conformance._calibration(biased).startswith("**")
+def test_calibration_bolds_only_what_the_rejections_make_unlikely():
+    """No rejection in 300 worlds against a 0.7% prediction is no evidence of bias (about
+    12% likely); none against 2% is (0.2%), and so is 73% against 85%."""
+    def results(p, rejected):
+        return [{"power_predicted": p + 0.0001 * (i % 3), "p_value": 0.0 if i < rejected
+                 else 1.0} for i in range(300)]
+    assert conformance._calibration(results(0.007, 0)).endswith("‡")
+    assert conformance._calibration(results(0.02, 0)).startswith("**")
+    assert conformance._calibration(results(0.85, 220)).startswith("**")
+    assert conformance._at_most(np.full(300, 0.007), 0) == pytest.approx(0.993**300)

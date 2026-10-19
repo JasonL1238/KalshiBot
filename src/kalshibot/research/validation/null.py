@@ -233,7 +233,8 @@ def _repeated_variance(df: pd.DataFrame, rep: Repeated, ratio: np.ndarray,
     """Per cluster `rep` marks, the boundary variance of its summed won × count with the
     null's covariances revised: two positions on one contract, a before b, share one
     outcome and covary by B_b(1 − B_b), the later one's break-even variance (Coupling R's
-    term); two contracts of an exclusive event covary by 0 (cross="zero": the truth's
+    term; for two priced at one time, the mean of their two); two contracts of an
+    exclusive event covary by 0 (cross="zero": the truth's
     −P·P′ is at most 0) or by −p·p′ at each one's own price (cross="prices"); a ladder's
     keep the null's nested terms, and each position's own variance the null's, all
     scaled to the boundary as `_clusters` scales them."""
@@ -362,7 +363,7 @@ def widening(dep: Dependence, buy_yes: np.ndarray, count: np.ndarray, p_yes: np.
     """The factor (≥ 1) by which the null's variance must grow for these positions:
     (ΣV + ρ·ΣW + 2 Σ_h w_h c_h Σ_d A_d A_{d+h}) / ΣV0 (w_h: `Dependence.weight`) over
     this sample's own days (`_days`), never below the break-even variance ΣV, even where
-    YES and NO positions offset. `exact` and `order` go to `_clusters`."""
+    YES and NO positions offset. `exact`, `order` and `repeated` go to `_clusters`."""
     return _factor(dep, _days(_clusters(buy_yes, count, p_yes, lo, hi, cluster, day,
                                         break_even, exact, order, repeated)))
 
