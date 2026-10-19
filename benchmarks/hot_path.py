@@ -3,11 +3,11 @@
 Run: python benchmarks/hot_path.py   (needs the [bench] extra)
 
 A `harness.Sender` process replays synthetic Kalshi frames over loopback on an open-loop
-schedule: steady, with bursts, and with a reconnect's snapshot burst (every one of 500
-markets' snapshots at one instant, as after a resubscribe). Each stack consumes the
-feed, keeps every book, and runs one decision rule: buy YES (an IOC limit at the ask)
-when a market's best ask first falls a tick below where its first snapshot put it.
-Each order is signed (Ed25519, `KalshiSigner`), serialized, and POSTed, without
+schedule: steady, with bursts, and with a reconnect's snapshot burst (every market's
+snapshot at one instant, as after a resubscribe, amid steady traffic). Each stack
+consumes the feed, keeps every book, and runs one decision rule: buy YES (an IOC limit
+at the ask) when a market's best ask first falls a tick below where its first snapshot
+put it. Each order is signed (Ed25519, `KalshiSigner`), serialized, and POSTed, without
 blocking the feed, to a local TLS server (`harness.OrderServer`) that acknowledges it. Stacks:
 - incumbent: what the repo uses today. asyncio, websockets read through
   `kalshi.ws.Connection`, stdlib json, `kalshi.ws.BookFeed`, httpx (HTTP/1.1);
@@ -23,6 +23,7 @@ the callback. Nothing here reaches Kalshi, and the key is generated per run.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import gc
 import json
 from array import array
@@ -190,7 +191,7 @@ class Scenario:
     resnapshot: bool = False  # mid-replay, every market's snapshot again at one instant
 
     def faster(self, factor: float) -> Scenario:
-        return Scenario(self.pattern.faster(factor), self.markets, self.resnapshot)
+        return dataclasses.replace(self, pattern=self.pattern.faster(factor))
 
 
 def scenarios(reconnect_markets: int) -> dict[str, Scenario]:
@@ -216,14 +217,16 @@ def bursts(offsets: list[int]) -> list[tuple[int, int]]:
 def run(n: int, scenario: Scenario, rounds: int
         ) -> tuple[dict[str, StackRuns], array, list[tuple[int, int]]]:
     """Each stack consumes `rounds` replays of one stream (interleaved). Returns each
-    stack's runs, the sender's lag, and the replay's bursts."""
+    stack's runs, the sender's lag, and the replay's bursts of the scenario's sizes (a
+    burst `arrivals` cut short at the end isn't one)."""
     signer = KalshiSigner("bench", ed25519.Ed25519PrivateKey.generate())
-    per = n // rounds
-    stream = harness.Stream(per, scenario.markets,
-                            resnapshot_at=per // 2 if scenario.resnapshot else None)
-    offsets = harness.arrivals(per, scenario.pattern)
-    if (k := stream.resnapshot) is not None:
-        offsets[k:k + scenario.markets] = [offsets[k]] * scenario.markets
+    per, m = n // rounds, scenario.markets
+    stream = harness.Stream(per, m, resnapshot_at=per // 2 if scenario.resnapshot else None)
+    if (k := stream.resnapshot) is None:
+        offsets = harness.arrivals(per, scenario.pattern)
+    else:  # the snapshots arrive at one instant; the traffic around them keeps its pace
+        base = harness.arrivals(per - m, scenario.pattern)
+        offsets = base[:k] + [base[k]] * m + base[k:]
     runs: dict[str, list] = {name: [] for name in STACKS}
     with harness.OrderServer() as server:
         def candidate(name: str):
@@ -238,8 +241,10 @@ def run(n: int, scenario: Scenario, rounds: int
 
         result = harness.replay({name: candidate(name) for name in STACKS}, stream.frames,
                                 offsets, rounds)
+    sizes = {scenario.pattern.burst_size, m if scenario.resnapshot else 0}
     return ({name: StackRuns(r, result.lat[name], result.cpu[name])
-             for name, r in runs.items()}, result.lag, bursts(offsets))
+             for name, r in runs.items()}, result.lag,
+            [(i, size) for i, size in bursts(offsets) if size in sizes])
 
 
 def check_agreement(results: dict[str, StackRuns]) -> int:
@@ -261,7 +266,7 @@ def main(n: int = 40_000, speed: float = 1.0, rounds: int | None = None,
     for label, scenario in scenarios(reconnect_markets).items():
         scenario = scenario.faster(speed)
         with harness.Steal() as steal:
-            results, lag, burst_list = run(n, scenario, rounds)
+            results, lag, burst_ends = run(n, scenario, rounds)
         decisions = check_agreement(results)
         resnapshot = ", every market's snapshot again mid-replay" if scenario.resnapshot else ""
         print(f"open-loop replay, {label} ({scenario.pattern}{resnapshot}), {rounds} × "
@@ -269,14 +274,14 @@ def main(n: int = 40_000, speed: float = 1.0, rounds: int | None = None,
               f"{decisions} orders per replay, host CPU steal {steal}")
         print(harness.table_head("") + f"{'CPU µs/frame':>14}")
         print(harness.row("(sender lag, per write)", lag))
+        per = n // rounds
         for name, r in results.items():
-            per = len(r.frames) // rounds
             print(name)
             print(harness.row("  frame → processed", r.frames) + f"{r.cpu:>14.1f}")
-            for size in sorted({size for _, size in burst_list}):
+            for size in sorted({size for _, size in burst_ends}):
                 print(harness.row(f"  burst of {size} → its last frame done",
                                   [r.frames[k * per + i] for k in range(rounds)
-                                   for i, s in burst_list if s == size]))
+                                   for i, s in burst_ends if s == size]))
             print(harness.row("  frame → signed order", r.pooled("to_order")))
             print(harness.row("  frame → ack (loopback TLS)", r.pooled("to_ack")))
             print(harness.row("  stage: decode", r.pooled("decode")))

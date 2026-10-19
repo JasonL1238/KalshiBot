@@ -160,7 +160,17 @@ def main(n: int = 40_000, speed: float = 1.0, rounds: int | None = None) -> None
                    PACKAGES)
     candidates = {f"{name} / {loop}": harness.on_loop(loop, client)
                   for name, client in CLIENTS.items() for loop in ("asyncio", "uvloop")}
-    harness.report_ws_replays("client / loop", candidates, n, speed, rounds)
+    rounds = rounds or harness.default_rounds(len(candidates))
+    stream = harness.Stream(n // rounds)
+    for label, pattern in harness.PATTERNS.items():
+        pattern = pattern.faster(speed)
+        offsets = harness.arrivals(n // rounds, pattern)
+        with harness.Steal() as steal:
+            result = harness.replay(candidates, stream.frames, offsets, rounds)
+        print(f"open-loop replay, {label} ({pattern}), {rounds} × {n // rounds:,} frames "
+              f"each, host CPU steal {steal}")
+        print(result.table("client / loop"))
+        print()
 
 
 if __name__ == "__main__":

@@ -102,8 +102,8 @@ def header(title: str, packages: Sequence[str] = ()) -> None:
     if packages:
         print("packages: " + ", ".join(f"{p} {_version(p)}" for p in packages))
     print("replay processes pinned to CPUs " + ", ".join(f"{k} {v}" for k, v in CPUS.items())
-          + " (separate physical cores)"
-          if CPUS else "replay processes not pinned (needs Linux and 3 physical cores)")
+          + " (separate cores, as the OS reports them; a VM can't see its host's)"
+          if CPUS else "replay processes not pinned (needs Linux and 3 cores)")
     print()
 
 
@@ -386,8 +386,9 @@ class Stream:
     for every market, then book deltas, the trades that cause some of them, and our own
     fills. Books start 5-100 levels deep per side. With `resnapshot_at`, every market's
     snapshot comes again from that message on (`self.resnapshot` is where), as after a
-    reconnect. Book messages carry a contiguous `seq` per subscription; trades and fills
-    carry none, the case a decoder must accept. Frames are compact JSON bytes."""
+    reconnect (which would also start a new sid and seq; here they carry on). Book
+    messages carry a contiguous `seq` per subscription; trades and fills carry none, the
+    case a decoder must accept. Frames are compact JSON bytes."""
 
     SIDS = {"orderbook_snapshot": 1, "orderbook_delta": 1, "trade": 2, "fill": 3}
 
@@ -661,22 +662,6 @@ def replay(candidates: dict[str, Callable[[str, Recorder], None]], frames: list[
                     cpu[name] += rec.cpu_ns
                     lags.extend(lag)
     return Replay(lat, {name: ns / 1000 / len(lat[name]) for name, ns in cpu.items()}, lags)
-
-
-def report_ws_replays(first: str, candidates: dict[str, Callable], n: int, speed: float,
-                      rounds: int | None = None) -> None:
-    """Replay a synthetic stream to WebSocket candidates under each of `PATTERNS`."""
-    rounds = rounds or default_rounds(len(candidates))
-    stream = Stream(n // rounds)
-    for label, pattern in PATTERNS.items():
-        pattern = pattern.faster(speed)
-        offsets = arrivals(n // rounds, pattern)
-        with Steal() as steal:
-            result = replay(candidates, stream.frames, offsets, rounds)
-        print(f"open-loop replay, {label} ({pattern}), {rounds} × {n // rounds:,} frames "
-              f"each, host CPU steal {steal}")
-        print(result.table(first))
-        print()
 
 
 # ---- a local TLS order endpoint ------------------------------------------------------------

@@ -10,8 +10,7 @@ wheels for the rest, e.g. free-threaded: PYTHONPATH=src:benchmarks)
    once the long-lived containers have grown by a quarter since the last full
    collection: the script grows them by half (at least 200k), as a process that keeps
    what it decodes does, and times the full collections that land, with and without
-   freeze. It also
-   estimates how often that comes at the replay's rate.
+   freeze. It also estimates how often that comes at the replay's rate.
 2. The feed's per-message work (decode plus book update), replayed open loop with bursts
    in this process, under each setting:
    - default: generational collection at the interpreter's thresholds;
@@ -115,10 +114,9 @@ def grow(count: int) -> Pauses:
     pauses = Pauses()
     gc.callbacks.append(pauses)
     try:
-        grown = [[i] for i in range(count)]
+        [[i] for i in range(count)]  # kept alive until the list is built, then freed
     finally:
         gc.callbacks.remove(pauses)
-    del grown
     return pauses
 
 
@@ -155,6 +153,7 @@ def run(setting: str, path: tuple, frames: list[bytes], offsets: list[int],
     warm, _ = stepper(path)  # an untimed pass on a feed of its own
     for f in frames[:harness.WARMUP]:
         warm(f)
+    del warm  # so its feed and tape don't join the long-lived heap
     gc.collect()
     step, _ = stepper(path)
     if setting == "(harness floor)":
