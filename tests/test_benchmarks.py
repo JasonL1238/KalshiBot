@@ -3,6 +3,7 @@ charge queueing to the items queued, decoders and feeds must agree, every replay
 must arrive intact, and each script must run end to end at a small scale. Scripts that
 import a [bench] package skip without it."""
 
+import faulthandler
 import importlib
 import json
 import sys
@@ -115,7 +116,11 @@ SMALL = {  # script -> main() arguments for a run of a few seconds
 def test_script_runs_end_to_end(script, capsys, monkeypatch):
     module = bench(script)
     monkeypatch.setattr(harness, "VERIFY", True)  # replays check each frame's payload
-    module.main(**SMALL[script])
+    faulthandler.dump_traceback_later(300, exit=True)  # a hung replay fails, with stacks
+    try:
+        module.main(**SMALL[script])
+    finally:
+        faulthandler.cancel_dump_traceback_later()
     out = capsys.readouterr().out
     assert out.startswith(f"{script}") and "platform: " in out and "python: " in out
     assert "mean µs" in out and "p99.9" in out
