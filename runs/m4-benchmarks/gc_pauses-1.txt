@@ -1,0 +1,61 @@
+gc_pauses: garbage-collector settings under burst replay
+platform: Linux-6.18.44-fc-v139-x86_64-with-glibc2.39, Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs
+python: CPython 3.13.16
+packages: msgspec 0.22.0
+replay processes pinned to CPUs sender 0, client 1, server 2 (separate cores, as the OS reports them; a VM can't see its host's)
+
+gc thresholds (2000, 10, 10)
+
+long-lived heap of 0 dicts (52,158 tracked objects in all): one full collection takes 9.4 ms, 0.0 ms after gc.freeze()
+  pauses while 200,000 more containers are kept: 99 (0 full), total 8.1 ms, max 937 µs
+  the same after gc.freeze(): 99 (0 full), total 8.1 ms, max 756 µs
+  json + BookFeed, keeps every message: 1.0 tracked containers kept per message, so at 2,000 msgs/s a full collection about every 6.52 s
+
+json + BookFeed, keeps nothing, 0-dict heap, Poisson 1000/s + 200 at once every 200 ms, 4 × 10,000 frames, host CPU steal 0.3%
+gc setting             n    mean µs        p50        p99      p99.9        max   collector pauses
+(harness floor)   40,000       38.4        4.5      113.7     1897.6    31591.3   none
+default           40,000      438.7       73.3     2011.1     2949.8     4611.2   none
+freeze            40,000      405.0       64.7     1921.8     2280.6     3546.6   none
+disable           40,000      435.9       69.0     2066.4     2846.0     3197.1   none
+
+json + BookFeed, keeps every message, 0-dict heap, Poisson 1000/s + 200 at once every 200 ms, 4 × 10,000 frames, host CPU steal 0.2%
+gc setting             n    mean µs        p50        p99      p99.9        max   collector pauses
+(harness floor)   40,000       26.1        4.5      137.7      987.2     3937.8   none
+default           40,000      464.9       78.8     2374.1     4081.6     4367.3   44 (0 full), total 7.2 ms, max 244 µs
+freeze            40,000      489.0       78.1     2550.3     4597.2     9364.3   44 (0 full), total 7.5 ms, max 724 µs
+disable           40,000      445.7       67.2     2118.8     2922.6     3431.3   none
+
+msgspec structs + StructFeed, keeps every message, 0-dict heap, Poisson 1000/s + 200 at once every 200 ms, 4 × 10,000 frames, host CPU steal 0.3%
+gc setting             n    mean µs        p50        p99      p99.9        max   collector pauses
+(harness floor)   40,000       24.0        4.9      123.0      537.5     3589.8   none
+default           40,000      248.4       41.5     1199.6     1709.7     3486.6   none
+freeze            40,000      246.9       45.9     1141.5     2762.6     5034.1   none
+disable           40,000      275.1       42.4     1323.6     7906.0    12777.7   none
+
+
+long-lived heap of 1,000,000 dicts (2,052,176 tracked objects in all): one full collection takes 421.0 ms, 0.0 ms after gc.freeze()
+  pauses while 1,026,088 more containers are kept: 512 (1 full), total 521.1 ms, max 477146 µs, longest full 477.1 ms
+  the same after gc.freeze(): 512 (3 full), total 109.5 ms, max 37286 µs, longest full 37.3 ms
+  json + BookFeed, keeps every message: 1.0 tracked containers kept per message, so at 2,000 msgs/s a full collection about every 257 s
+
+json + BookFeed, keeps nothing, 1,000,000-dict heap, Poisson 1000/s + 200 at once every 200 ms, 4 × 10,000 frames, host CPU steal 0.2%
+gc setting             n    mean µs        p50        p99      p99.9        max   collector pauses
+(harness floor)   40,000       34.2        4.3      255.6     1794.1     5686.3   none
+default           40,000      401.6       61.8     1794.1     2233.6     3511.8   none
+freeze            40,000      425.1       74.3     2015.2     2533.1     3232.2   none
+disable           40,000      422.3       63.3     2121.1     2610.6     3263.9   none
+
+json + BookFeed, keeps every message, 1,000,000-dict heap, Poisson 1000/s + 200 at once every 200 ms, 4 × 10,000 frames, host CPU steal 0.2%
+gc setting             n    mean µs        p50        p99      p99.9        max   collector pauses
+(harness floor)   40,000       23.1        4.0      109.5      355.4     1602.8   none
+default           40,000      463.6       74.3     2195.2     2565.1     5349.1   44 (0 full), total 6.7 ms, max 205 µs
+freeze            40,000      447.5       69.5     2136.5     2607.4     3072.0   44 (0 full), total 6.7 ms, max 241 µs
+disable           40,000      450.1       69.0     2078.0     2366.0     5531.7   none
+
+msgspec structs + StructFeed, keeps every message, 1,000,000-dict heap, Poisson 1000/s + 200 at once every 200 ms, 4 × 10,000 frames, host CPU steal 0.3%
+gc setting             n    mean µs        p50        p99      p99.9        max   collector pauses
+(harness floor)   40,000       24.1        4.1      123.1      702.0     2733.5   none
+default           40,000      248.5       42.8     1168.8     1727.3     5193.5   none
+freeze            40,000      260.1       44.7     1256.6     1640.8     3969.4   none
+disable           40,000      247.2       43.2     1132.9     1358.6     3594.0   none
+

@@ -1,0 +1,64 @@
+hot_path (P1): decode → book → decide → sign → send, end to end
+platform: Linux-6.18.44-fc-v139-x86_64-with-glibc2.39, Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs
+python: CPython 3.13.16
+packages: uvloop 0.22.1, picows 2.3.1, msgspec 0.22.0, aiohttp 3.14.5, websockets 17.2, httpx 0.28.1, cryptography 50.0.2
+replay processes pinned to CPUs sender 0, client 1, server 2 (separate cores, as the OS reports them; a VM can't see its host's)
+
+open-loop replay, steady (Poisson 2000/s), 4 × 10,000 frames over 50 markets per stack, 135 orders per replay, host CPU steal 0.6%
+                                         n    mean µs        p50        p99      p99.9        max  CPU µs/frame
+(sender lag, per write)             80,000       23.2       13.2      142.5     1936.9    11963.1
+incumbent (asyncio, websockets, json, httpx)
+  frame → processed                 40,000      248.7      139.7     1591.1    10973.0    20359.4         128.1
+  frame → signed order                 540      378.8      291.2          —          —     6874.3
+  frame → ack (loopback TLS)           540     3296.7     3031.3          —          —    12867.3
+  stage: decode                     40,000        9.7        7.8       35.1       97.2     2034.6
+  stage: book                       40,000       12.8       10.3       50.6      309.2    19972.4
+  stage: decide + sign                 540      145.5      142.9          —          —      784.6
+P1 (uvloop, picows, msgspec, aiohttp)
+  frame → processed                 40,000      138.4       82.1      843.5     7669.3    24580.9          62.0
+  frame → signed order                 540      306.0      233.0          —          —    22267.8
+  frame → ack (loopback TLS)           540     1251.4     1163.2          —          —    25709.3
+  stage: decode                     40,000        3.4        2.4       12.6       41.6     1710.2
+  stage: book                       40,000       13.9       11.0       53.1      363.6     2450.1
+  stage: decide + sign                 540      144.0      138.9          —          —      427.4
+
+open-loop replay, bursty (Poisson 1000/s + 200 at once every 200 ms), 4 × 10,000 frames over 50 markets per stack, 135 orders per replay, host CPU steal 0.6%
+                                         n    mean µs        p50        p99      p99.9        max  CPU µs/frame
+(sender lag, per write)             40,200       23.8       13.9      132.6     1596.1     4815.5
+incumbent (asyncio, websockets, json, httpx)
+  frame → processed                 40,000     1650.3     1244.9     6595.0     8607.5    17668.0         106.2
+  burst of 200 → its last frame done     100     4601.7     4211.7          —          —    10376.4
+  frame → signed order                 540     1892.9     1590.3          —          —     8127.1
+  frame → ack (loopback TLS)           540    11084.1     9099.8          —          —    35785.7
+  stage: decode                     40,000        7.7        5.2       31.3       84.0     2654.4
+  stage: book                       40,000        9.9        6.4       45.3      301.5     2382.0
+  stage: decide + sign                 540      133.4      131.0          —          —     1388.9
+P1 (uvloop, picows, msgspec, aiohttp)
+  frame → processed                 40,000      662.1      257.9     2805.1     3703.7     4955.1          45.8
+  burst of 200 → its last frame done     100     2036.5     1906.4          —          —     3999.3
+  frame → signed order                 540      764.5      412.7          —          —     3192.1
+  frame → ack (loopback TLS)           540     2586.4     2757.9          —          —     7306.6
+  stage: decode                     40,000        2.6        1.2       11.9       43.5      709.0
+  stage: book                       40,000       10.7        5.3       50.4      345.5     3182.1
+  stage: decide + sign                 540      123.9      122.9          —          —     1494.4
+
+open-loop replay, reconnect (Poisson 2000/s, every market's snapshot again mid-replay), 4 × 10,000 frames over 500 markets per stack, 286 orders per replay, host CPU steal 0.8%
+                                         n    mean µs        p50        p99      p99.9        max  CPU µs/frame
+(sender lag, per write)             76,008       43.9       13.1      263.8     9523.7    23456.8
+incumbent (asyncio, websockets, json, httpx)
+  frame → processed                 40,000     4118.8      190.9    88535.7   116186.5   119417.2         175.1
+  burst of 500 → its last frame done       4   102848.5    89920.0          —          —   119417.2
+  frame → signed order               1,144     3601.7      299.1   105649.8          —   118393.8
+  frame → ack (loopback TLS)         1,144     8110.0     2999.5   138372.2          —   169180.3
+  stage: decode                     40,000       10.4        8.2       37.9      109.6     3661.2
+  stage: book                       40,000       28.2       11.3      298.1      433.3     2847.3
+  stage: decide + sign               1,144      121.5      115.6      221.8          —     1616.6
+P1 (uvloop, picows, msgspec, aiohttp)
+  frame → processed                 40,000     3006.0       99.2    67903.3    81013.8    85128.3          81.6
+  burst of 500 → its last frame done       4    78385.0    75875.8          —          —    85128.3
+  frame → signed order               1,144     2423.8      205.7    71342.5          —    83998.9
+  frame → ack (loopback TLS)         1,144     3442.7      999.8    75564.3          —    88504.3
+  stage: decode                     40,000        4.2        2.7       19.5       58.6     3957.5
+  stage: book                       40,000       27.9       12.4      237.0      398.8     6705.5
+  stage: decide + sign               1,144      118.1      110.5      225.3          —     3795.4
+
