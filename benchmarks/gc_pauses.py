@@ -8,7 +8,10 @@ wheels for the rest, e.g. free-threaded: PYTHONPATH=src:benchmarks)
    what a trading process holds (market metadata, positions, history), and once
    `gc.freeze()` has moved that heap out of every collection. CPython collects in full
    once the long-lived containers have grown by a quarter since the last full
-   collection, so the script also estimates how often that comes at the replay's rate.
+   collection: the script grows them by half (at least 200k), as a process that keeps
+   what it decodes does, and times the full collections that land, with and without
+   freeze. It also
+   estimates how often that comes at the replay's rate.
 2. The feed's per-message work (decode plus book update), replayed open loop with bursts
    in this process, under each setting:
    - default: generational collection at the interpreter's thresholds;
@@ -57,7 +60,8 @@ def paths() -> dict[str, tuple]:
 
 
 def long_lived_heap(n: int) -> list[dict]:
-    """`n` dicts holding a list and a dict each: 3n GC-tracked containers."""
+    """`n` dicts holding a list and a dict each: 2n GC-tracked containers (CPython never
+    tracks the inner dict, which holds only atomic values)."""
     return [{"ticker": f"KXSYN{i:07d}", "fields": [i, str(i)], "meta": {"i": i}}
             for i in range(n)]
 
@@ -67,20 +71,23 @@ class Pauses:
     collector isn't generational: it reports generation 0, but every pass is full."""
 
     def __init__(self) -> None:
-        self.ns, self.full, self._start = array("q"), 0, 0
+        self.ns, self.full, self.full_max, self._start = array("q"), 0, 0, 0
 
     def __call__(self, phase: str, info: dict) -> None:
         if phase == "start":
             self._start = time.perf_counter_ns()
-        else:
-            self.ns.append(time.perf_counter_ns() - self._start)
-            self.full += FREE_THREADED or info["generation"] == 2
+            return
+        ns = time.perf_counter_ns() - self._start
+        self.ns.append(ns)
+        if FREE_THREADED or info["generation"] == 2:
+            self.full, self.full_max = self.full + 1, max(self.full_max, ns)
 
     def __str__(self) -> str:
         if not self.ns:
             return "none"
+        full = f", longest full {self.full_max / 1e6:.1f} ms" if self.full else ""
         return (f"{len(self.ns)} ({self.full} full), total {sum(self.ns) / 1e6:.1f} ms, "
-                f"max {max(self.ns) / 1000:.0f} µs")
+                f"max {max(self.ns) / 1000:.0f} µs{full}")
 
 
 def full_collection_ms(repeats: int = 5) -> tuple[float, float]:
@@ -99,6 +106,20 @@ def full_collection_ms(repeats: int = 5) -> tuple[float, float]:
     frozen = median_ms()
     gc.unfreeze()
     return thawed, frozen
+
+
+def grow(count: int) -> Pauses:
+    """The collector's pauses while `count` long-lived containers are added, from just
+    after a full collection."""
+    gc.collect()
+    pauses = Pauses()
+    gc.callbacks.append(pauses)
+    try:
+        grown = [[i] for i in range(count)]
+    finally:
+        gc.callbacks.remove(pauses)
+    del grown
+    return pauses
 
 
 def stepper(path: tuple):
@@ -131,6 +152,9 @@ def kept_per_message(path: tuple, frames: list[bytes]) -> float:
 
 def run(setting: str, path: tuple, frames: list[bytes], offsets: list[int],
         pauses: Pauses) -> array:
+    warm, _ = stepper(path)  # an untimed pass on a feed of its own
+    for f in frames[:harness.WARMUP]:
+        warm(f)
     gc.collect()
     step, _ = stepper(path)
     if setting == "(harness floor)":
@@ -162,6 +186,11 @@ def main(n: int = 40_000, speed: float = 1.0, heaps: tuple[int, ...] = (0, 1_000
         tracked = len(gc.get_objects())
         print(f"\nlong-lived heap of {size:,} dicts ({tracked:,} tracked objects in all): one "
               f"full collection takes {thawed:.1f} ms, {frozen:.1f} ms after gc.freeze()")
+        count = max(tracked // 2, 200_000)
+        print(f"  pauses while {count:,} more containers are kept: {grow(count)}")
+        gc.freeze()
+        print(f"  the same after gc.freeze(): {grow(count)}")
+        gc.unfreeze()
         for name, path in paths().items():
             kept = kept_per_message(path, stream.frames)
             if kept >= 0.01:

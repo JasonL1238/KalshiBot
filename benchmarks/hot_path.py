@@ -3,11 +3,12 @@
 Run: python benchmarks/hot_path.py   (needs the [bench] extra)
 
 A `harness.Sender` process replays synthetic Kalshi frames over loopback on an open-loop
-schedule with bursts. Each stack consumes the feed, keeps every book, and runs one
-decision rule: buy YES (an IOC limit at the ask) when a market's best ask first falls a
-tick below where its snapshot put it. Each order is signed (Ed25519, `KalshiSigner`),
-serialized, and POSTed, without blocking the feed, to a local TLS server
-(`harness.OrderServer`) that acknowledges it. Stacks:
+schedule: steady, with bursts, and with a reconnect's snapshot burst (every one of 500
+markets' snapshots at one instant, as after a resubscribe). Each stack consumes the
+feed, keeps every book, and runs one decision rule: buy YES (an IOC limit at the ask)
+when a market's best ask first falls a tick below where its first snapshot put it.
+Each order is signed (Ed25519, `KalshiSigner`), serialized, and POSTed, without
+blocking the feed, to a local TLS server (`harness.OrderServer`) that acknowledges it. Stacks:
 - incumbent: what the repo uses today. asyncio, websockets read through
   `kalshi.ws.Connection`, stdlib json, `kalshi.ws.BookFeed`, httpx (HTTP/1.1);
 - P1: uvloop, picows, msgspec typed structs into `decode.StructFeed` (the same
@@ -58,7 +59,7 @@ class Timings:
         return cls(array("q", bytes(8 * n)), array("q", bytes(8 * n)))
 
 
-class Strategy:
+class Rule:
     """The decision rule. Edge-triggered per market: a market fires again only after its
     ask has gone back above the limit."""
 
@@ -92,9 +93,9 @@ class Stack:
     """Consumes one replay: `on_frame` runs decode → book → decide → sign for each frame,
     then hands any order to `post(body, headers)` as a task."""
 
-    def __init__(self, decoder, feed, strategy: Strategy, timings: Timings,
+    def __init__(self, decoder, feed, rule: Rule, timings: Timings,
                  sink: harness.Recorder, post):
-        self.decoder, self.feed, self.strategy, self.timings = decoder, feed, strategy, timings
+        self.decoder, self.feed, self.rule, self.timings = decoder, feed, rule, timings
         self.sink, self.post, self.tasks = sink, post, set()
 
     def on_frame(self, payload) -> None:
@@ -110,7 +111,7 @@ class Stack:
         ticker = self.feed.on_message(msg)
         t2 = clock()
         t.decode[i], t.book[i] = t1 - t0, t2 - t1
-        if ticker is not None and (order := self.strategy.decide(self.feed.books[ticker], i)):
+        if ticker is not None and (order := self.rule.decide(self.feed.books[ticker], i)):
             t3 = clock()
             t.decide_sign.append(t3 - t2)
             t.to_order.append(t3 - due)
@@ -133,11 +134,11 @@ class Stack:
             task.result()
 
 
-async def incumbent(url: str, sink, strategy: Strategy, timings: Timings,
+async def incumbent(url: str, sink, rule: Rule, timings: Timings,
                     server: harness.OrderServer) -> None:
     async with http_clients.httpx_client(server) as post:
         await http_clients.warm(post, WARM_BURST)
-        stack = Stack(json.loads, BookFeed(), strategy, timings, sink, post)
+        stack = Stack(json.loads, BookFeed(), rule, timings, sink, post)
         async with connect(url, **ws_clients.WEBSOCKETS_OPTIONS) as ws:
             async for _, frame in Connection(ws):
                 stack.on_frame(frame)
@@ -146,11 +147,11 @@ async def incumbent(url: str, sink, strategy: Strategy, timings: Timings,
         await stack.drain()
 
 
-async def p1(url: str, sink, strategy: Strategy, timings: Timings,
+async def p1(url: str, sink, rule: Rule, timings: Timings,
              server: harness.OrderServer) -> None:
     async with http_clients.aiohttp_client(server) as post:
         await http_clients.warm(post, WARM_BURST)
-        stack = Stack(decode.typed_decoder.decode, decode.StructFeed(), strategy, timings,
+        stack = Stack(decode.typed_decoder.decode, decode.StructFeed(), rule, timings,
                       sink, post)
         transport, _ = await ws_connect(
             lambda: ws_clients.Listener(stack.on_frame, lambda: sink.done), url)
@@ -171,7 +172,7 @@ STACKS = {  # name -> (event loop, consumer, order-body encoder to bytes)
 
 @dataclass
 class StackRuns:
-    runs: list[tuple[Strategy, Timings]]  # one per timed replay
+    runs: list[tuple[Rule, Timings]]  # one per timed replay
     frames: array  # frame → processed, ns
     cpu: float  # µs per frame
 
@@ -182,29 +183,63 @@ class StackRuns:
         return out
 
 
-def run(n: int, pattern: harness.Pattern, rounds: int
-        ) -> tuple[dict[str, StackRuns], array, list[int]]:
+@dataclass(frozen=True)
+class Scenario:
+    pattern: harness.Pattern
+    markets: int = 50
+    resnapshot: bool = False  # mid-replay, every market's snapshot again at one instant
+
+    def faster(self, factor: float) -> Scenario:
+        return Scenario(self.pattern.faster(factor), self.markets, self.resnapshot)
+
+
+def scenarios(reconnect_markets: int) -> dict[str, Scenario]:
+    """The feed's two schedules, and a reconnect: after a SequenceGap the feed resubscribes
+    and every market's snapshot arrives at once, amid steady traffic."""
+    steady = harness.PATTERNS["steady"]
+    return {"steady": Scenario(steady), "bursty": Scenario(harness.PATTERNS["bursty"]),
+            "reconnect": Scenario(steady, reconnect_markets, resnapshot=True)}
+
+
+def bursts(offsets: list[int]) -> list[tuple[int, int]]:
+    """(index of its last item, size) for each burst: items sharing one scheduled time.
+    A burst has drained once its last item is done."""
+    out, start = [], 0
+    for i in range(1, len(offsets) + 1):
+        if i == len(offsets) or offsets[i] != offsets[start]:
+            if i - start > 1:
+                out.append((i - 1, i - start))
+            start = i
+    return out
+
+
+def run(n: int, scenario: Scenario, rounds: int
+        ) -> tuple[dict[str, StackRuns], array, list[tuple[int, int]]]:
     """Each stack consumes `rounds` replays of one stream (interleaved). Returns each
-    stack's runs, the sender's lag, and the replay's burst ends."""
+    stack's runs, the sender's lag, and the replay's bursts."""
     signer = KalshiSigner("bench", ed25519.Ed25519PrivateKey.generate())
-    stream = harness.Stream(n // rounds)
-    offsets = harness.arrivals(n // rounds, pattern)
+    per = n // rounds
+    stream = harness.Stream(per, scenario.markets,
+                            resnapshot_at=per // 2 if scenario.resnapshot else None)
+    offsets = harness.arrivals(per, scenario.pattern)
+    if (k := stream.resnapshot) is not None:
+        offsets[k:k + scenario.markets] = [offsets[k]] * scenario.markets
     runs: dict[str, list] = {name: [] for name in STACKS}
     with harness.OrderServer() as server:
         def candidate(name: str):
             loop, consume, encode = STACKS[name]
 
             def go(url: str, sink: harness.Recorder) -> None:
-                strategy, timings = Strategy(signer, encode), Timings.for_frames(len(offsets))
+                rule, timings = Rule(signer, encode), Timings.for_frames(len(offsets))
                 if not sink.warmup:
-                    runs[name].append((strategy, timings))
-                harness.run_on(loop, lambda: consume(url, sink, strategy, timings, server))
+                    runs[name].append((rule, timings))
+                harness.run_on(loop, lambda: consume(url, sink, rule, timings, server))
             return go
 
         result = harness.replay({name: candidate(name) for name in STACKS}, stream.frames,
                                 offsets, rounds)
     return ({name: StackRuns(r, result.lat[name], result.cpu[name])
-             for name, r in runs.items()}, result.lag, harness.burst_ends(offsets))
+             for name, r in runs.items()}, result.lag, bursts(offsets))
 
 
 def check_agreement(results: dict[str, StackRuns]) -> int:
@@ -218,26 +253,30 @@ def check_agreement(results: dict[str, StackRuns]) -> int:
     return len(decisions[0])
 
 
-def main(n: int = 40_000, speed: float = 1.0, rounds: int | None = None) -> None:
+def main(n: int = 40_000, speed: float = 1.0, rounds: int | None = None,
+         reconnect_markets: int = 500) -> None:
     harness.header("hot_path (P1): decode → book → decide → sign → send, end to end",
                    PACKAGES)
     rounds = rounds or harness.default_rounds(len(STACKS))
-    for label, pattern in harness.PATTERNS.items():
-        pattern = pattern.faster(speed)
+    for label, scenario in scenarios(reconnect_markets).items():
+        scenario = scenario.faster(speed)
         with harness.Steal() as steal:
-            results, lag, ends = run(n, pattern, rounds)
+            results, lag, burst_list = run(n, scenario, rounds)
         decisions = check_agreement(results)
-        print(f"open-loop replay, {label} ({pattern}), {rounds} × {n // rounds:,} frames "
-              f"per stack, {decisions} orders per replay, host CPU steal {steal}")
+        resnapshot = ", every market's snapshot again mid-replay" if scenario.resnapshot else ""
+        print(f"open-loop replay, {label} ({scenario.pattern}{resnapshot}), {rounds} × "
+              f"{n // rounds:,} frames over {scenario.markets} markets per stack, "
+              f"{decisions} orders per replay, host CPU steal {steal}")
         print(harness.table_head("") + f"{'CPU µs/frame':>14}")
         print(harness.row("(sender lag, per write)", lag))
         for name, r in results.items():
+            per = len(r.frames) // rounds
             print(name)
             print(harness.row("  frame → processed", r.frames) + f"{r.cpu:>14.1f}")
-            if ends:
-                per = len(r.frames) // rounds
-                print(harness.row("  burst → its last frame processed",
-                                  [r.frames[k * per + i] for k in range(rounds) for i in ends]))
+            for size in sorted({size for _, size in burst_list}):
+                print(harness.row(f"  burst of {size} → its last frame done",
+                                  [r.frames[k * per + i] for k in range(rounds)
+                                   for i, s in burst_list if s == size]))
             print(harness.row("  frame → signed order", r.pooled("to_order")))
             print(harness.row("  frame → ack (loopback TLS)", r.pooled("to_ack")))
             print(harness.row("  stage: decode", r.pooled("decode")))

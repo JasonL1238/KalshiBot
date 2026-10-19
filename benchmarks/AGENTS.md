@@ -15,11 +15,10 @@ Setup: `pip install -e ".[dev,bench]"`. Run: `python benchmarks/<script>.py`.
 | `harness.py` | Shared: schedules, open-loop timing, synthetic frames, replay sender, local order server |
 | `decode.py` | JSON decoder for WebSocket frames (stdlib json, orjson, msgspec); `decode.Message` structs and `StructFeed` |
 | `sign.py` | Trading key type: Ed25519 vs RSA-2048 PSS |
-| `loop.py` | Event loop: asyncio vs uvloop, with a minimal reader to isolate the loop |
-| `ws_clients.py` | WebSocket client: websockets vs aiohttp vs picows, on each loop |
+| `ws_clients.py` | Event loop and WebSocket client: websockets vs aiohttp vs picows vs a bare reader (the loop alone), each on asyncio and uvloop |
 | `http_clients.py` | Order HTTP client: httpx HTTP/1.1 and HTTP/2 vs aiohttp |
 | `gc_pauses.py` | GC policy: default vs `gc.freeze()` vs `gc.disable()`, also on free-threaded builds |
-| `hot_path.py` | P1: the pure-Python hot path end to end, incumbent stack vs the fastest components |
+| `hot_path.py` | P1: the pure-Python hot path end to end, incumbent stack vs the fastest components, steady, bursty, and through a reconnect's snapshot burst |
 
 ## Rules for code here
 

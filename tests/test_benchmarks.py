@@ -104,11 +104,10 @@ def test_decoders_agree_and_typed_feed_matches_book_feed():
 SMALL = {  # script -> main() arguments for a run of a few seconds
     "decode": {"n": 2_000, "speed": 20},
     "sign": {"n": 400, "speed": 10},
-    "loop": {"n": 800, "speed": 10},
     "ws_clients": {"n": 1_200, "speed": 10},
     "http_clients": {"n": 300, "speed": 1},
     "gc_pauses": {"n": 800, "speed": 10, "heaps": (0, 10_000)},
-    "hot_path": {"n": 4_000, "speed": 5},
+    "hot_path": {"n": 4_000, "speed": 5, "reconnect_markets": 100},
 }
 
 

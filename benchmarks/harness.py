@@ -26,6 +26,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from array import array
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import contextmanager
@@ -67,11 +68,29 @@ def _version(package: str) -> str:
         return "missing"
 
 
-# CPUs for the replay's processes, kept apart where the OS can pin (Linux, 3+ CPUs). Read
-# when the parent imports this, unpinned; children get their CPU as an argument.
-_ALLOWED = sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else []
-CPUS = (dict(zip(("sender", "client", "server"), _ALLOWED[:3], strict=True))
-        if len(_ALLOWED) >= 3 else {})
+def _one_cpu_per_core() -> list[int]:
+    """One allowed CPU on each physical core (Linux), so that pinned processes never
+    share a core as hyperthread siblings; [] where the OS can't pin."""
+    if not hasattr(os, "sched_getaffinity"):
+        return []
+    cores: dict[tuple[str, str], int] = {}
+    for cpu in sorted(os.sched_getaffinity(0)):
+        topology = Path(f"/sys/devices/system/cpu/cpu{cpu}/topology")
+        try:
+            core = ((topology / "physical_package_id").read_text().strip(),
+                    (topology / "core_id").read_text().strip())
+        except OSError:
+            core = ("", str(cpu))
+        cores.setdefault(core, cpu)
+    return sorted(cores.values())
+
+
+# CPUs for the replay's processes, on separate physical cores where the OS can pin
+# (Linux, 3+ cores). Read when the parent imports this, unpinned; children get their CPU
+# as an argument.
+_CORES = _one_cpu_per_core()
+CPUS = (dict(zip(("sender", "client", "server"), _CORES[:3], strict=True))
+        if len(_CORES) >= 3 else {})
 
 
 def header(title: str, packages: Sequence[str] = ()) -> None:
@@ -83,7 +102,8 @@ def header(title: str, packages: Sequence[str] = ()) -> None:
     if packages:
         print("packages: " + ", ".join(f"{p} {_version(p)}" for p in packages))
     print("replay processes pinned to CPUs " + ", ".join(f"{k} {v}" for k, v in CPUS.items())
-          if CPUS else "replay processes not pinned (needs Linux and 3 CPUs)")
+          + " (separate physical cores)"
+          if CPUS else "replay processes not pinned (needs Linux and 3 physical cores)")
     print()
 
 
@@ -176,12 +196,6 @@ def row(name: str, ns: Sequence[int], width: int = 34) -> str:
              qs["max"]]
     return f"{name:<{width}}{n:>8,}" + "".join(
         f"{'—':>11}" if math.isnan(v) else f"{v:>11.1f}" for v in shown)
-
-
-def burst_ends(offsets: Sequence[int]) -> list[int]:
-    """The index of each burst's last item: a burst drains by the time it is done."""
-    return [i for i in range(1, len(offsets)) if offsets[i] == offsets[i - 1]
-            and (i + 1 == len(offsets) or offsets[i + 1] != offsets[i])]
 
 
 def default_rounds(candidates: int) -> int:
@@ -290,8 +304,7 @@ def _size(units: int) -> str:
 
 
 def _uuid(rng: random.Random) -> str:
-    h = f"{rng.getrandbits(128):032x}"
-    return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}"
+    return str(uuid.UUID(int=rng.getrandbits(128)))
 
 
 class _Market:
@@ -371,14 +384,16 @@ class _Market:
 class Stream:
     """A replayable WebSocket session in Kalshi's formats (docs/RESEARCH.md §1): snapshots
     for every market, then book deltas, the trades that cause some of them, and our own
-    fills. Books start 5-100 levels deep per side. Book messages carry a contiguous `seq`
-    per subscription; trades and fills carry none, the case a decoder must accept. Frames
-    are compact JSON bytes."""
+    fills. Books start 5-100 levels deep per side. With `resnapshot_at`, every market's
+    snapshot comes again from that message on (`self.resnapshot` is where), as after a
+    reconnect. Book messages carry a contiguous `seq` per subscription; trades and fills
+    carry none, the case a decoder must accept. Frames are compact JSON bytes."""
 
     SIDS = {"orderbook_snapshot": 1, "orderbook_delta": 1, "trade": 2, "fill": 3}
 
-    def __init__(self, n: int, markets: int = 50, depth: int = 100, seed: int = 1):
-        if n < markets:
+    def __init__(self, n: int, markets: int = 50, depth: int = 100, seed: int = 1,
+                 resnapshot_at: int | None = None):
+        if n < markets * (1 if resnapshot_at is None else 2):
             raise ValueError(f"{n} frames can't hold {markets} markets' snapshots")
         rng = random.Random(seed)
         self.markets = [_Market(rng, f"KXSYN{i:03d}-26OCT20-B{50 + i}.5",
@@ -396,7 +411,15 @@ class Stream:
 
         for m in self.markets:
             emit("orderbook_snapshot", m.snapshot())
+        self.resnapshot = None
         while len(self.messages) < n:
+            pending = resnapshot_at is not None and self.resnapshot is None
+            room = n - len(self.messages) - (markets if pending else 0)  # >= 0
+            if pending and (len(self.messages) >= resnapshot_at or room == 0):
+                self.resnapshot = len(self.messages)
+                for m in self.markets:
+                    emit("orderbook_snapshot", m.snapshot())
+                continue
             ts_ms += rng.randint(0, 3)
             m = rng.choice(self.markets)
             if rng.random() < 0.01:
@@ -404,7 +427,7 @@ class Stream:
                 continue
             before = {side: dict(levels) for side, levels in m.sides.items()}, m.fair
             events = m.step(ts_ms)
-            if len(self.messages) + len(events) > n:  # it won't fit: undo it, end on fills
+            if len(events) > room:  # it won't fit: undo it, end on fills
                 m.sides, m.fair = before
                 continue
             for kind, body in events:
@@ -491,6 +514,7 @@ def _send(pipe, cpu: int | None, frames: list[bytes], offsets: list[int],
           websocket: bool) -> None:
     _pin(cpu)
     server = socket.create_server(("127.0.0.1", 0))
+    server.settimeout(120)  # a client that never connects ends the sender, not the run
     pipe.send((server.getsockname()[1], _affinity()))
     wire = [_ws_frame(f) for f in frames] if websocket else frames
     while (msg := pipe.recv()) != "stop":  # ("go", limit): one replay per connection
