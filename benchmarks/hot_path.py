@@ -224,9 +224,9 @@ def run(n: int, scenario: Scenario, rounds: int
     stream = harness.Stream(per, m, resnapshot_at=per // 2 if scenario.resnapshot else None)
     if (k := stream.resnapshot) is None:
         offsets = harness.arrivals(per, scenario.pattern)
-    else:  # the snapshots arrive at one instant; the traffic around them keeps its pace
-        base = harness.arrivals(per - m, scenario.pattern)
-        offsets = base[:k] + [base[k]] * m + base[k:]
+    else:  # the snapshots take one arrival's instant; the traffic around keeps its pace
+        base = harness.arrivals(per - m + 1, scenario.pattern)
+        offsets = base[:k] + [base[k]] * m + base[k + 1:]
     runs: dict[str, list] = {name: [] for name in STACKS}
     with harness.OrderServer() as server:
         def candidate(name: str):
