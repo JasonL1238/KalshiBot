@@ -37,8 +37,7 @@ and prints the two tables in docs/BACKTESTING.md, then R and R̄ (`_coupling`) o
 whose positions repeat; append rows only, since each row is seeded by its position.
 `... conformance power` checks `gauntlet.power`, the estimate behind an Inconclusive
 verdict, against the gauntlet's measured power (`PREDICTION_GRID`).
-`--only <prefix>` runs only the rows whose label starts with it (e.g. "makers:");
-`--repeated <method>` sets `Gates.repeated` (`gauntlet.REPEATED_METHODS`).
+`--only <prefix>` runs only the rows whose label starts with it (e.g. "makers:").
 """
 
 from __future__ import annotations
@@ -63,6 +62,7 @@ FAVORITES = 8000  # the mixed family also buys YES at asks of at least this
 # fewer draws (slightly less power); a power estimate here bootstraps as the test does
 GATES = replace(gauntlet.PREREGISTERED, draws=2_000, power_worlds=200, power_resamples=2_000)
 MIN_DSR, MAX_PBO = 0.95, 0.2  # candidate gates, measured
+CALIBRATION_TAIL = scipy_stats.norm.cdf(-2)  # `_calibration`'s one-sided 2σ
 BASE = pd.Timestamp("2020-01-01", tz="UTC")  # day 0 of every world
 
 
@@ -419,29 +419,25 @@ POWER_HEADER = ("| Edge world | true net edge per position | positions/day | "
                 + " | ".join(POWER_COLUMNS) + " |")
 
 
-def _rows(grid: list, scale: float, seed: int = 0, only: str = "", repeated: str = "",
-          **extra):
+def _rows(grid: list, scale: float, seed: int = 0, only: str = "", **extra):
     """(label, worlds, settings, `one_world` results) for each row of a grid whose label
-    starts with `only`, in order, each row seeded by its position in the grid; with
-    `repeated`, under that `Gates.repeated`."""
+    starts with `only`, in order, each row seeded by its position in the grid."""
     for i, (label, worlds, kwargs) in enumerate(grid):
         if not label.startswith(only):
             continue
-        if repeated:
-            kwargs = {**kwargs, "gates": replace(kwargs.get("gates", GATES), repeated=repeated)}
         n = max(20, int(worlds * scale))
         yield label, n, kwargs, simulate(n, seed=seed + i, **extra, **kwargs)
         print(f"{label}: done", file=sys.stderr, flush=True)
 
 
-def report(scale: float = 1.0, only: str = "", repeated: str = "") -> str:
+def report(scale: float = 1.0, only: str = "") -> str:
     """The size and power tables in docs/BACKTESTING.md, from `GRID` (`scale` shrinks it;
     `only`, see `_rows`), then the mean `_coupling` of each row whose positions repeat
     (makers, H1-shaped)."""
     size = [SIZE_HEADER, "|---|---|---|---|---|" + "---|" * len(PROCEDURES)]
     power = [POWER_HEADER, "|---|---|---|" + "---|" * len(POWER_COLUMNS)]
     coupling = []
-    for label, n, kwargs, results in _rows(GRID, scale, only=only, repeated=repeated):
+    for label, n, kwargs, results in _rows(GRID, scale, only=only):
         by_alpha = {a: rates(results, a) for a in (GATES.alpha, GATES.level)}
         r = by_alpha[GATES.alpha]
         if not math.isnan(r["coupling"]):  # positions repeat (NaN if a world has none)
@@ -511,8 +507,6 @@ def _calibration(results: list[dict[str, float]]) -> str:
     return f"**{text}**" if unlikely else f"{text} ‡"
 
 
-CALIBRATION_TAIL = scipy_stats.norm.cdf(-2)  # one-sided 2σ
-
 
 def _at_most(p: np.ndarray, k: int) -> float:
     """P(K ≤ k) for K a sum of independent Bernoulli(p_i) (Poisson binomial), exactly."""
@@ -524,7 +518,7 @@ def _at_most(p: np.ndarray, k: int) -> float:
     return float(dist[:k + 1].sum())
 
 
-def prediction_report(scale: float = 1.0, only: str = "", repeated: str = "") -> str:
+def prediction_report(scale: float = 1.0, only: str = "") -> str:
     """The predicted-vs-measured power table in docs/BACKTESTING.md: `gauntlet.power`'s
     estimate, made as `confirm` makes it with conformance's draws, against how often the
     gauntlet found the edge, both at α/m; again over the worlds whose cross-day estimate
@@ -533,7 +527,7 @@ def prediction_report(scale: float = 1.0, only: str = "", repeated: str = "") ->
     later settlement. `only`: see `_rows`."""
     rows = [PREDICTION_HEADER, "|---|---|---|---|---|"]
     for label, _, _, results in _rows(PREDICTION_GRID, scale, seed=1000, only=only,
-                                      repeated=repeated, predict=True):
+                                      predict=True):
         r, tilted = rates(results), [s for s in results if s["cross_day"] < 0]
         rows.append(f"| {label} | {r['edge_per_position'] / CENT:+.2f}¢ | "
                     f"{r['widening']:.2f} | {_calibration(results)} | "
@@ -542,13 +536,13 @@ def prediction_report(scale: float = 1.0, only: str = "", repeated: str = "") ->
 
 
 if __name__ == "__main__":
-    args, options = sys.argv[1:], {"--only": "", "--repeated": ""}
-    for flag in options:
-        if flag in args:
-            at = args.index(flag)
-            options[flag], args = args[at + 1], args[:at] + args[at + 2:]
-    only, repeated = options["--only"], options["--repeated"]
+    args, only = sys.argv[1:], ""
+    if "--only" in args:
+        at = args.index("--only")
+        only, args = args[at + 1], args[:at] + args[at + 2:]
+    if any(a.startswith("--") for a in args):
+        sys.exit(f"unknown options: {[a for a in args if a.startswith('--')]}")
     if args[:1] == ["power"]:
-        print(prediction_report(float(args[1]) if len(args) > 1 else 1.0, only, repeated))
+        print(prediction_report(float(args[1]) if len(args) > 1 else 1.0, only))
     else:
-        print(report(float(args[0]) if args else 1.0, only, repeated))
+        print(report(float(args[0]) if args else 1.0, only))

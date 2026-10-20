@@ -332,7 +332,8 @@ def test_jackknife_skips_runs_of_days_without_a_cluster():
 def test_repeated_decisions_share_their_contracts_outcome_by_hand():
     """Two NO buys of one bucket at two times and one of another bucket of the event: the
     same contract's pair covaries by the later buy's break-even variance, the two buckets
-    by 0 ("zero") or −p·p′ ("prices"); each position's own variance stays the null's."""
+    of the exclusive event by 0 (the ladder test below covers non-exclusive clusters);
+    each position's own variance stays the null's."""
     args = {"buy_yes": np.zeros(3, bool), "count": np.ones(3),
             "p_yes": np.array([0.1, 0.2, 0.3]), "lo": np.array([0.0, 0.0, 0.5]),
             "hi": np.array([0.1, 0.2, 0.8]), "cluster": np.zeros(3, int),
@@ -340,9 +341,35 @@ def test_repeated_decisions_share_their_contracts_outcome_by_hand():
     nested = null._clusters(**args)
     ratio = (nested["boundary"] / nested["own"]).iloc[0]
     p = args["hi"] - args["lo"]
-    own = (p * (1 - p)).sum() * ratio
-    for cross, term in (("zero", 0.0), ("prices", -(0.1 + 0.2) * 0.3 * ratio)):
-        rep = null.Repeated(np.ones(3, bool), np.array([0, 0, 1]), np.array([1, 2, 1]),
-                            np.ones(3, bool), cross)
-        by_hand = own + 2 * 0.8 * 0.2 + 2 * term  # the second buy (B = 0.8) is the later
-        assert null._clusters(**args, repeated=rep)["var_b"].iloc[0] == pytest.approx(by_hand)
+    rep = null.Repeated(np.ones(3, bool), np.array([0, 0, 1]), np.ones(3, bool))
+    by_hand = (p * (1 - p)).sum() * ratio + 2 * 0.8 * 0.2  # the second buy is the later
+    revised = null._clusters(**args, repeated=rep, order=np.array([1, 2, 1]))
+    assert revised["var_b"].iloc[0] == pytest.approx(by_hand)
+    tied = null._clusters(**args, repeated=rep, order=np.array([1, 1, 1]))
+    mean = (0.9 * 0.1 + 0.8 * 0.2) / 2  # priced at once: the mean of the two
+    assert tied["var_b"].iloc[0] == pytest.approx(by_hand - 2 * 0.8 * 0.2 + 2 * mean)
+
+
+def test_repeated_decisions_on_a_ladder_keep_its_nested_cross_terms():
+    """On a strike ladder only the same strike's pairs change; the closed form matches
+    the covariance matrix summed in full."""
+    rng = np.random.default_rng(2)
+    n = 7
+    contract = rng.integers(0, 3, n)
+    strike = np.array([0.2, 0.4, 0.7])
+    p_yes = np.clip(strike[contract] + rng.normal(0, 0.03, n), 0.05, 0.95)
+    args = {"buy_yes": rng.random(n) < 0.3, "count": rng.integers(1, 4, n).astype(float),
+            "p_yes": p_yes, "lo": np.zeros(n), "hi": p_yes, "cluster": np.zeros(n, int),
+            "day": np.zeros(n, int), "break_even": rng.uniform(0.5, 0.95, n)}
+    order = rng.permutation(n)
+    nested = null._clusters(**args)
+    ratio = (nested["boundary"] / nested["own"]).iloc[0]
+    s = np.where(args["buy_yes"], 1.0, -1.0) * args["count"]
+    cov = (np.minimum.outer(p_yes, p_yes) - np.outer(p_yes, p_yes)) * ratio
+    later = np.where(order[:, None] >= order, np.arange(n)[:, None], np.arange(n))
+    b = args["break_even"][later]
+    same = contract[:, None] == contract
+    cov = np.where(same & ~np.eye(n, dtype=bool), b * (1 - b), cov)
+    rep = null.Repeated(np.ones(n, bool), contract, np.zeros(n, bool))
+    revised = null._clusters(**args, repeated=rep, order=order)
+    assert revised["var_b"].iloc[0] == pytest.approx(s @ cov @ s)

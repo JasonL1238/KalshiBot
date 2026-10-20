@@ -36,12 +36,6 @@ class Gates:
     power_worlds: int = 1_000  # simulated confirmations behind a power estimate
     power_resamples: int = 2_000  # bootstrap draws in each
     jackknife_blocks: int = 10  # a maker sample's widening SE (`_null`)
-    # how the null couples a taker's repeated decisions on one contract (`_repeated`)
-    repeated: str = "nested"
-
-    def __post_init__(self):
-        if self.repeated not in REPEATED_METHODS:
-            raise ValueError(f"repeated must be one of {REPEATED_METHODS}: {self.repeated!r}")
 
     @property
     def level(self) -> float:
@@ -49,8 +43,6 @@ class Gates:
         return self.alpha / self.families
 
 
-# runs/h1-revision/candidates.md: the nested intervals, then candidates D and C
-REPEATED_METHODS = ("nested", "h1-D", "h1-C")
 PREREGISTERED = Gates()
 
 
@@ -195,28 +187,38 @@ def _null(d: Positions, p: Positions, rng: np.random.Generator, gates: Gates
     """The dependence estimated on discovery positions `d`, the widening it implies for
     confirmation positions `p`, and `p`'s null totals (not yet widened). A sample with
     maker fills (docs/BACKTESTING.md, Maker null) gets their covariance on one outcome
-    (`_maker_args`), every cross-day correlation weighted alike
+    (`_null_args`), every cross-day correlation weighted alike
     (`null.Dependence.flat`), and a widening raised by its delete-a-block jackknife SE
-    over blocks of the dependence sample's days (`null.jackknife`, `gates.jackknife_blocks`)."""
+    over blocks of the dependence sample's days (`null.jackknife`, `gates.jackknife_blocks`).
+    A taker's repeated decisions on one contract get their shared outcome's covariance
+    (`_repeated`; runs/h1-revision/candidates.md)."""
     sample = (d.won, d.buy_yes, d.count, d.p_yes, d.lo, d.hi, d.cluster, d.day, d.break_even)
     scored = (p.buy_yes, p.count, p.p_yes, p.lo, p.hi, p.cluster, p.day, p.break_even)
     flat = {"flat": True} if d.makes else {}
-    dep = null.dependence(*sample, **_maker_args(d), **flat, **_repeated(d, gates))
-    widen = null.widening(dep, *scored, **_maker_args(p), **_repeated(p, gates))
+    dep = null.dependence(*sample, **_null_args(d), **flat)
+    widen = null.widening(dep, *scored, **_null_args(p))
     if d.makes:
-        replicates = null.jackknife(*sample, gates.jackknife_blocks, **_maker_args(d), **flat)
-        widen += null.jackknife_se(replicates, *scored, **_maker_args(p))
+        replicates = null.jackknife(*sample, gates.jackknife_blocks, **_null_args(d), **flat)
+        widen += null.jackknife_se(replicates, *scored, **_null_args(p))
     return dep, widen, null.simulate_totals(p.lo, p.hi, p.cluster, p.buy_yes, p.count,
                                             p.p_yes, gates.draws, rng)
 
 
-def _repeated(p: Positions, gates: Gates) -> dict:
-    """`null._clusters`' repeated for `p` under `gates.repeated`: the clusters where a
-    taker buys one contract at more than one time (H1's decisions, or any family's), and
-    no maker fills share them; or none. Every position of such a cluster is revised,
-    including a one-time buy of another of its contracts."""
-    if gates.repeated == "nested" or p.contract is None or p.order is None:
-        return {}
+def _null_args(p: Positions) -> dict:
+    """The null functions' keyword arguments for `p`: `null._clusters`' exact for maker
+    fills, whose fills on one contract all settle on its outcome (docs/BACKTESTING.md,
+    Maker null), and repeated for a taker's repeated decisions (`_repeated`)."""
+    maker = {"exact": p.maker, "order": p.order} if p.makes else {}
+    return {**maker, **_repeated(p)}
+
+
+def _repeated(p: Positions) -> dict:
+    """`null._clusters`' repeated and order for `p`: the clusters where a taker buys one
+    contract at more than one time (H1's decisions, or any family's), and no maker fills
+    share them; or none. Every position of such a cluster is revised, including a
+    one-time buy of another of its contracts."""
+    if p.contract is None or p.order is None or p.exclusive is None:
+        return {}  # without them, the nested null
     taker = np.ones(len(p.day), bool) if p.maker is None else ~p.maker
     key = pd.DataFrame({"cluster": p.cluster, "contract": p.contract, "order": p.order})[taker]
     times = key.groupby(["cluster", "contract"])["order"].nunique()
@@ -226,16 +228,7 @@ def _repeated(p: Positions, gates: Gates) -> dict:
     rows = np.isin(p.cluster, hit)
     if not rows.any():
         return {}
-    exclusive = np.zeros(len(p.day), bool) if p.exclusive is None else p.exclusive
-    return {"repeated": null.Repeated(rows, p.contract, p.order, exclusive,
-                                      "zero" if gates.repeated == "h1-D" else "prices")}
-
-
-def _maker_args(p: Positions) -> dict:
-    """`null._clusters`' exact and order for `p`: a resting bid's fills on one contract
-    all settle on its outcome, so with maker fills each cluster of them gets their
-    covariance on one outcome (docs/BACKTESTING.md, Maker null)."""
-    return {"exact": p.maker, "order": p.order} if p.makes else {}
+    return {"repeated": null.Repeated(rows, p.contract, p.exclusive), "order": p.order}
 
 
 def _alternative(p: Positions, edge: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -273,8 +266,7 @@ def power(discovery_positions: Positions, positions: Positions, days: np.ndarray
     null_net = totals * np.sqrt(widen)
     win, lo, hi = _alternative(p, edge)
     scale = np.sqrt(max(null.widening(dependence, p.buy_yes, p.count, hi - lo, lo, hi,
-                                      p.cluster, p.day, win, **_maker_args(p),
-                                      **_repeated(p, gates))
+                                      p.cluster, p.day, win, **_null_args(p))
                         for dependence in (dep, null.Dependence(dep.rho, ()))))
     stake = p.count * float(PRICE_SCALE)
     day = np.searchsorted(days, p.day)

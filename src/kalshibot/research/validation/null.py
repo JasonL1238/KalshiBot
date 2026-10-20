@@ -194,6 +194,7 @@ def _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact=Non
         df.loc[g.index, "var"] = 0.0
         with np.errstate(all="ignore"):  # macOS Accelerate raises spurious flags in matmul
             df.loc[g.index[0], "var"] = w @ (overlap - np.outer(b - a, b - a)) @ w
+    order = np.arange(len(df)) if order is None else np.asarray(order)
     out = df.groupby("cluster").agg(day=("day", "max"), var=("var", "sum"),
                                     own=("own", "sum"), boundary=("boundary", "sum"),
                                     sign=("sign", "sum"))
@@ -202,12 +203,10 @@ def _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact=Non
     if exact is not None and np.any(exact):
         whole = pd.Series(np.asarray(exact, bool)).groupby(df["cluster"]).all()
         rows = df["cluster"].map(whole).to_numpy()
-        order = np.arange(len(df)) if order is None else np.asarray(order)
         var = _shared_outcome_variance(df[rows], order[rows])
         out.loc[var.index, "var_b"] = var.clip(lower=0)
     if repeated is not None and repeated.rows.any():
-        ratio_of = df["cluster"].map(ratio).to_numpy()
-        var = _repeated_variance(df, repeated, ratio_of, np.asarray(break_even, float))
+        var = _repeated_variance(df, repeated, order, ratio, out["var"], break_even)
         out.loc[var.index, "var_b"] = var
     out["direction"] = np.where(out["sign"] >= 0, 1.0, -1.0)
     return out
@@ -215,47 +214,46 @@ def _clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact=Non
 
 @dataclass(frozen=True)
 class Repeated:
-    """A taker's repeated decisions (H1's), for `_clusters`: `rows` marks the positions of
-    clusters where one contract is bought at more than one time; `contract` and `order`
-    give each position's contract and when it is priced; `exclusive`, whether its
-    cluster is an exclusive event's; `cross`, how two contracts of an exclusive event
-    covary ("zero" or "prices")."""
+    """A taker's repeated decisions (H1's, or any family's), for `_clusters`: `rows` marks
+    the positions of clusters where one contract is bought at more than one time,
+    `contract` each position's contract, and `exclusive` whether its cluster is an
+    exclusive event's (per position, constant within a cluster)."""
 
     rows: np.ndarray
     contract: np.ndarray
-    order: np.ndarray
     exclusive: np.ndarray
-    cross: str = "zero"
 
 
-def _repeated_variance(df: pd.DataFrame, rep: Repeated, ratio: np.ndarray,
-                       break_even: np.ndarray) -> pd.Series:
-    """Per cluster `rep` marks, the boundary variance of its summed won × count with the
-    null's covariances revised: two positions on one contract, a before b, share one
-    outcome and covary by B_b(1 − B_b), the later one's break-even variance (Coupling R's
-    term; for two priced at one time, the mean of their two); two contracts of an
-    exclusive event covary by 0 (cross="zero": the truth's
-    −P·P′ is at most 0) or by −p·p′ at each one's own price (cross="prices"); a ladder's
-    keep the null's nested terms, and each position's own variance the null's, all
-    scaled to the boundary as `_clusters` scales them."""
-    out = {}
-    rows = np.flatnonzero(rep.rows)
-    for k, idx in pd.Series(rows).groupby(df["cluster"].to_numpy()[rows]).indices.items():
-        i = rows[idx]
-        a, b, w = df["lo"].to_numpy()[i], df["hi"].to_numpy()[i], df["sign"].to_numpy()[i]
-        overlap = np.clip(np.minimum.outer(b, b) - np.maximum.outer(a, a), 0, None)
-        cov = (overlap - np.outer(b - a, b - a)) * ratio[i][0]
-        same = rep.contract[i][:, None] == rep.contract[i]
-        later = np.where(rep.order[i][:, None] >= rep.order[i], np.arange(len(i))[:, None],
-                         np.arange(len(i)))
-        be = break_even[i][later]
-        cov = np.where(same & ~np.eye(len(i), dtype=bool), be * (1 - be), cov)
-        if rep.exclusive[i][0]:
-            cross = 0.0 if rep.cross == "zero" else -np.outer(b - a, b - a) * ratio[i][0]
-            cov = np.where(~same, cross, cov)
-        with np.errstate(all="ignore"):  # as above
-            out[k] = max(float(w @ cov @ w), 0.0)
-    return pd.Series(out)
+def _repeated_variance(df: pd.DataFrame, rep: Repeated, order: np.ndarray,
+                       ratio: pd.Series, nested: pd.Series, break_even: np.ndarray
+                       ) -> pd.Series:
+    """Per cluster `rep` marks, the boundary variance of its summed won × count
+    (runs/h1-revision/candidates.md, D): two positions on one contract, a before b (by
+    `order`), share its outcome and covary by B_b(1 − B_b), the later one's break-even
+    variance, as Coupling R takes them (two priced at once, by the mean of theirs); two
+    contracts of an exclusive event covary by 0
+    (the truth's −P·P′ is at most 0); a ladder's two contracts keep the null's nested
+    covariance (`nested`, the cluster's null variance), and each position its own null
+    variance, both scaled by the cluster's `ratio` as `_clusters` scales them."""
+    r = df[rep.rows].assign(contract=rep.contract[rep.rows], order=order[rep.rows],
+                            b=np.asarray(break_even)[rep.rows], p=lambda d: d["hi"] - d["lo"])
+    key = ["cluster", "contract"]
+    v = r["b"] * (1 - r["b"])
+    at = r.groupby(key + ["order"])["sign"].transform("sum")  # this contract, this time
+    moments = r.groupby(key + ["order"])["sign"].sum().groupby(level=key).cumsum()
+    upto = moments.reindex(pd.MultiIndex.from_frame(r[key + ["order"]])).to_numpy()
+    shared = (v * r["sign"] * (2 * (upto - at) + at - r["sign"])).groupby(r["cluster"]).sum()
+    own = (r["sign"] ** 2 * r["p"] * (1 - r["p"])).groupby(r["cluster"]).sum()
+    # the null's covariance within a contract, its intervals sharing one anchor:
+    # Σ s_a s_b min(p_a, p_b) − (Σ s p)², min taken in order of p
+    by_p = r.sort_values(key + ["p"], kind="stable")
+    after = by_p.groupby(key)["sign"].transform("sum") - by_p.groupby(key)["sign"].cumsum()
+    within = ((by_p["sign"] * by_p["p"] * (by_p["sign"] + 2 * after)).groupby(by_p["cluster"]).sum()
+              - (r["sign"] * r["p"]).groupby([r["cluster"], r["contract"]]).sum().pow(2)
+              .groupby(level="cluster").sum())
+    exclusive = pd.Series(rep.exclusive[rep.rows]).groupby(r["cluster"].to_numpy()).all()
+    cross = (nested.reindex(own.index) - within).where(~exclusive.reindex(own.index), 0.0)
+    return (ratio.reindex(own.index) * (own + cross) + shared).clip(lower=0)
 
 
 def _shared_outcome_variance(df: pd.DataFrame, order: np.ndarray) -> pd.Series:
@@ -305,12 +303,12 @@ def dependence(won: np.ndarray, buy_yes: np.ndarray, count: np.ndarray, p_yes: n
 
 
 def jackknife(won, buy_yes, count, p_yes, lo, hi, cluster, day, break_even, blocks: int,
-              exact=None, order=None, flat: bool = False) -> list[Dependence]:
+              exact=None, order=None, flat: bool = False, repeated=None) -> list[Dependence]:
     """`dependence` re-estimated with each of `blocks` contiguous runs of the clusters'
     calendar days dropped in turn (`_clusters` once, then only the moments), skipping
     runs without a cluster. A replicate has fewer days, so H can be one lag shorter."""
     clusters, x = _surprises(won, buy_yes, count, p_yes, lo, hi, cluster, day, break_even,
-                             exact, order)
+                             exact, order, repeated)
     days = clusters["day"].to_numpy()
     edges = np.linspace(days.min(), days.max() + 1, blocks + 1)
     block = np.searchsorted(edges, days, side="right") - 1
@@ -318,11 +316,11 @@ def jackknife(won, buy_yes, count, p_yes, lo, hi, cluster, day, break_even, bloc
 
 
 def jackknife_se(replicates: list[Dependence], buy_yes, count, p_yes, lo, hi, cluster, day,
-                 break_even, exact=None, order=None) -> float:
+                 break_even, exact=None, order=None, repeated=None) -> float:
     """The delete-a-block jackknife standard error of `widening` for these positions over
     `jackknife`'s replicates: √((B − 1)/B · Σ_b (W_b − W̄)²); 0 with fewer than 2."""
     days = _days(_clusters(buy_yes, count, p_yes, lo, hi, cluster, day, break_even, exact,
-                           order))
+                           order, repeated))
     w = np.array([_factor(dep, days) for dep in replicates])
     return float(np.sqrt(len(w) - 1) * w.std()) if len(w) > 1 else 0.0
 

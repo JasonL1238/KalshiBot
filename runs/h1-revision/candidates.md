@@ -101,3 +101,16 @@ registered method, both need the user's sign-off.
 The R table above was first computed in the session; `coupling-checks.txt` records the
 same checks rerun (scripts in `scripts/`, seeded, so it reproduces every value above), plus
 A's no-shock row (0.61), left blank above.
+
+## Choice (after the screens)
+
+Both candidates held every H1-shaped row at 0.25 and left no bold cell in the third table
+(`h1-D-*`, `h1-C-*`); h1-C also held the shock row at full scale (`h1-C-shock-row-1.0.md`:
+5.5 / 0.5 against 5.97 / 0.705). Chosen: **h1-D**. Its within-cluster variance is at
+least the truth's term by term on binaries and buckets (R ≤ 1 by construction; at most
+0.98 in every world checked), while h1-C's rests on prices at each position's own time
+and exceeds 1 on the multi-cutoff H1 row (1.05), with thin margins at full scale (5.5%
+against 5.97%) and at Holm's level on the no-shock row at 0.25 (0.8% against a full-scale
+limit of 0.705%). The cost is H1 power: measured 26.7 against h1-C's 52.0 (0.75¢ row) and
+54.7 against 70.7 (lasting shock), at 0.25. Which trade H1's registered method takes is
+the user's call; h1-C's code is at ab2d5c6.

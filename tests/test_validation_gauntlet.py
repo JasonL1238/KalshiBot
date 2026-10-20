@@ -248,26 +248,28 @@ def test_a_makers_null_adds_its_jackknife_se_when_shocks_last():
     assert se > 0 and as_maker == pytest.approx(point + se)
 
 
-def test_repeated_methods_leave_one_decision_takers_alone():
+def test_one_decision_takers_keep_the_nested_null():
+    """Positions bought once on each contract leave the verdict unchanged."""
     rng = np.random.default_rng(5)
     disc, conf = positions(2000, 200, 0.0, rng), positions(400, 40, 0.02, rng, first_day=200)
-    disc, conf = (replace(p, contract=np.arange(len(p.day)), order=np.zeros(len(p.day), int))
-                  for p in (disc, conf))
+    flagged = [replace(p, contract=np.arange(len(p.day)), order=np.zeros(len(p.day), int),
+                       exclusive=np.zeros(len(p.day), bool)) for p in (disc, conf)]
     returns, daily = pd.DataFrame({"a": rng.normal(0, 1, 200)}), pd.Series(rng.normal(0, 1, 40))
     gates = replace(GATES, draws=500)
     plain = gauntlet.evaluate(returns, disc, daily, conf, np.random.default_rng(1), gates)
-    for method in gauntlet.REPEATED_METHODS:
-        other = gauntlet.evaluate(returns, disc, daily, conf, np.random.default_rng(1),
-                                  replace(gates, repeated=method))
-        assert repr(other) == repr(plain)
-    with pytest.raises(ValueError, match="repeated must be one of"):
-        gauntlet.Gates(repeated="unknown")
+    other = gauntlet.evaluate(returns, flagged[0], daily, flagged[1],
+                              np.random.default_rng(1), gates)
+    assert repr(other) == repr(plain)
 
 
 def test_repeated_finds_a_contract_bought_at_two_times():
-    p = replace(positions(4, 1, 0.0, np.random.default_rng(1)),
-                cluster=np.array([0, 0, 1, 2]), contract=np.array([0, 0, 1, 2]),
-                order=np.array([1, 2, 1, 1]), maker=np.array([False, False, False, True]))
-    rep = gauntlet._repeated(p, replace(GATES, repeated="h1-D"))["repeated"]
-    assert rep.rows.tolist() == [True, True, False, False] and rep.cross == "zero"
-    assert gauntlet._repeated(p, GATES) == {}
+    p = replace(positions(5, 1, 0.0, np.random.default_rng(1)),
+                cluster=np.array([0, 0, 1, 2, 2]), contract=np.array([0, 0, 1, 2, 2]),
+                order=np.array([1, 2, 1, 1, 2]),
+                maker=np.array([False, False, False, True, True]),
+                exclusive=np.zeros(5, bool))
+    args = gauntlet._repeated(p)
+    assert args["repeated"].rows.tolist() == [True, True, False, False, False]
+    assert args["order"] is p.order  # cluster 2, a maker's, stays with the maker null
+    assert gauntlet._repeated(replace(p, contract=None)) == {}
+    assert gauntlet._repeated(replace(p, exclusive=None)) == {}  # buckets unknown: nested
