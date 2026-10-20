@@ -95,3 +95,9 @@ current path, so their rows stay byte-identical.
 
 Because calibration-SE changes the pass rule in step 6, and h1-D or h1-C changes H1's
 registered method, both need the user's sign-off.
+
+## Recorded checks (after the screens)
+
+The R table above was first computed in the session; `coupling-checks.txt` records the
+same checks rerun (scripts in `scripts/`, seeded, so it reproduces every value above), plus
+A's no-shock row (0.61), left blank above.

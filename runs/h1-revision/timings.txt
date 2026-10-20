@@ -15,3 +15,4 @@ h1-C-power-3-0.25 rc=0 wall=195s args=power 0.25 --only 'YES' --repeated h1-C
 h1-C-power-4-0.25 rc=0 wall=123s args=power 0.25 --only 'mixed' --repeated h1-C
 h1-C-power-5-0.25 rc=0 wall=929s args=power 0.25 --only 'makers:' --repeated h1-C
 h1-C-power-6-0.25 rc=0 wall=1084s args=power 0.25 --only 'H1-shaped:' --repeated h1-C
+CSCREENDONE
