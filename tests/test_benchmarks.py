@@ -139,7 +139,7 @@ def test_p1_charges_each_frame_its_processing_and_its_queue():
 
         signer = KalshiSigner("test", ed25519.Ed25519PrivateKey.generate())
         sink = harness.Recorder([0] * len(frames))
-        timings = hot_path.Timings.for_frames(len(frames), parse=True)
+        timings = hot_path.Timings.for_frames(len(frames))
         rule = hot_path.Rule(signer, hot_path.msgspec.json.encode)
         stack = hot_path.Stack(slow_decode, hot_path.decode.StructFeed(), rule, timings,
                                sink, post)
@@ -152,7 +152,6 @@ def test_p1_charges_each_frame_its_processing_and_its_queue():
     sink, t, rule = asyncio.run(consume())
     for i in range(len(frames)):
         assert sink.lat[i] >= max((i + 1) * 1_000_000, t.decode[i] + t.book[i]), i
-        assert t.parse[i] <= t.book[i], i
     assert rule.decisions, "the rule never fired on this stream"
     for (i, _, _), to_order, decide_sign in zip(rule.decisions, t.to_order, t.decide_sign,
                                                  strict=True):

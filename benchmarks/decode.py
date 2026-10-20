@@ -1,7 +1,7 @@
 """Which JSON decoder should the hot path use for Kalshi's WebSocket frames?
 
-Run: python benchmarks/decode.py   (msgspec comes with the core dependencies; orjson is
-optional, from the [bench] extra)
+Run: python benchmarks/decode.py   (msgspec is in the [bench] extra and also arrives with
+nautilus_trader; orjson is optional)
 
 Candidates decode a frame and pull out the fields the next stage needs (book updates,
 trade prints, our fills), so typed structs pay for nothing a dict reader skips:
@@ -92,7 +92,9 @@ typed_decoder = msgspec.json.Decoder(Message)
 
 
 class StructFeed:
-    """`kalshi.ws.BookFeed` for typed messages: the same books, sequence checks, errors.
+    """`kalshi.ws.BookFeed` for typed messages: the same books, sequence checks, and
+    errors on well-formed input. (It parses before it checks the sequence, so a malformed
+    price or size raises ValueError where BookFeed would advance the sequence first.)
     `on_message` is `apply(parse(m))`, two steps so that P1 can time them apart."""
 
     def __init__(self) -> None:
@@ -104,7 +106,9 @@ class StructFeed:
 
     @staticmethod
     def parse(m: Message) -> tuple:
-        """The message with its dollar and size strings as fixed-point units."""
+        """(message, a, b) with its dollar and size strings as fixed-point units: for a
+        delta, a and b are its price and size delta; for a snapshot, its yes and no
+        levels; otherwise None."""
         b = m.msg
         if type(m) is DeltaMsg:
             return m, price_units(b.price_dollars), size_units(b.delta_fp)

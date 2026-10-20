@@ -27,6 +27,8 @@ import asyncio
 import dataclasses
 import gc
 import json
+import statistics
+import time
 from array import array
 from dataclasses import dataclass, field
 
@@ -49,19 +51,16 @@ PACKAGES = ("uvloop", "picows", "msgspec", "aiohttp", "websockets", "httpx", "cr
 
 @dataclass
 class Timings:
-    """One replay's measurements, ns: per frame, and per order. `book` is the feed's whole
-    stage; `parse`, its share spent turning dollar and size strings into units, exists
-    only for a feed that does that as a step of its own (`decode.StructFeed`)."""
+    """One replay's measurements, ns: per frame, and per order."""
     decode: array
     book: array
-    parse: array | None = None
     decide_sign: array = field(default_factory=lambda: array("q"))
     to_order: array = field(default_factory=lambda: array("q"))
     to_ack: array = field(default_factory=lambda: array("q"))
 
     @classmethod
-    def for_frames(cls, n: int, parse: bool) -> Timings:
-        return cls(*(array("q", bytes(8 * n)) for _ in range(3 if parse else 2)))
+    def for_frames(cls, n: int) -> Timings:
+        return cls(array("q", bytes(8 * n)), array("q", bytes(8 * n)))
 
 
 class Rule:
@@ -102,7 +101,6 @@ class Stack:
                  sink: harness.Recorder, post):
         self.decoder, self.feed, self.rule, self.timings = decoder, feed, rule, timings
         self.sink, self.post, self.tasks = sink, post, set()
-        self.split = timings.parse is not None  # the feed parses, then applies
 
     def on_frame(self, payload) -> None:
         sink, clock, t = self.sink, harness.clock, self.timings
@@ -114,12 +112,7 @@ class Stack:
         t0 = clock()
         msg = self.decoder(payload)
         t1 = clock()
-        if self.split:
-            parsed = self.feed.parse(msg)
-            t.parse[i] = clock() - t1
-            ticker = self.feed.apply(parsed)
-        else:
-            ticker = self.feed.on_message(msg)
+        ticker = self.feed.on_message(msg)
         t2 = clock()
         t.decode[i], t.book[i] = t1 - t0, t2 - t1
         if ticker is not None and (order := self.rule.decide(self.feed.books[ticker], i)):
@@ -243,8 +236,7 @@ def run(n: int, scenario: Scenario, rounds: int
             loop, consume, encode = STACKS[name]
 
             def go(url: str, sink: harness.Recorder) -> None:
-                rule = Rule(signer, encode)
-                timings = Timings.for_frames(len(offsets), parse=consume is p1)
+                rule, timings = Rule(signer, encode), Timings.for_frames(len(offsets))
                 if not sink.warmup:
                     runs[name].append((rule, timings))
                 harness.run_on(loop, lambda: consume(url, sink, rule, timings, server))
@@ -256,6 +248,43 @@ def run(n: int, scenario: Scenario, rounds: int
     return ({name: StackRuns(r, result.lat[name], result.cpu[name])
              for name, r in runs.items()}, result.lag,
             [(i, size) for i, size in find_bursts(offsets) if size in sizes])
+
+
+def book_split_ns(markets: int = 500, repeats: int = 7) -> dict[str, dict[str, float]]:
+    """P1's book stage in two parts, ns per frame, closed loop and outside the replays
+    (timing them inside would add to P1's measured path): parse, the dollar and size
+    strings to units (`StructFeed.parse`); apply, the OrderBook built from a snapshot's
+    levels or the BookSide updated by a delta. Median of `repeats` passes."""
+    msgs = [decode.typed_decoder.decode(f) for f in harness.Stream(10_000, markets).frames]
+    snapshots = [m for m in msgs if type(m) is decode.SnapshotMsg]
+    deltas = [m for m in msgs if type(m) is decode.DeltaMsg]
+    times: dict[tuple[str, str], list[float]] = {}
+
+    def timed(key: tuple[str, str], fn, items: list) -> list:
+        start = time.perf_counter_ns()
+        out = [fn(x) for x in items]
+        times.setdefault(key, []).append((time.perf_counter_ns() - start) / len(items))
+        return out
+
+    def build(parsed: tuple) -> OrderBook:
+        m, yes, no = parsed
+        return OrderBook(m.msg.market_ticker, yes, no)
+
+    for _ in range(repeats):
+        books = {b.ticker: b for b in timed(("snapshot", "apply"), build, timed(
+            ("snapshot", "parse"), decode.StructFeed.parse, snapshots))}
+
+        def update(parsed: tuple, books=books) -> None:
+            m, price, delta = parsed
+            book = books[m.msg.market_ticker]
+            (book.yes if m.msg.side == "yes" else book.no).apply(price, delta)
+
+        timed(("delta", "apply"), update, timed(("delta", "parse"), decode.StructFeed.parse,
+                                                deltas))
+    out: dict[str, dict[str, float]] = {}
+    for (kind, step), ns in times.items():
+        out.setdefault(kind, {})[step] = statistics.median(ns)
+    return out
 
 
 def check_agreement(results: dict[str, StackRuns]) -> int:
@@ -274,6 +303,13 @@ def main(n: int = 40_000, speed: float = 1.0, rounds: int | None = None,
     harness.header("hot_path (P1): decode → book → decide → sign → send, end to end",
                    PACKAGES)
     rounds = rounds or harness.default_rounds(len(STACKS))
+    split = book_split_ns(reconnect_markets)
+    print(f"P1's book stage, ns per frame (closed loop, {reconnect_markets} markets):")
+    for kind, steps in split.items():
+        total = steps["parse"] + steps["apply"]
+        print(f"  {kind:<9} parse {steps['parse']:>9,.0f}   apply {steps['apply']:>9,.0f}   "
+              f"parse share {steps['parse'] / total:.0%}")
+    print()
     for label, scenario in scenarios(reconnect_markets).items():
         scenario = scenario.faster(speed)
         with harness.Steal() as steal:
@@ -296,9 +332,7 @@ def main(n: int = 40_000, speed: float = 1.0, rounds: int | None = None,
             print(harness.row("  frame → signed order", r.pooled("to_order")))
             print(harness.row("  frame → ack (loopback TLS)", r.pooled("to_ack")))
             print(harness.row("  stage: decode", r.pooled("decode")))
-            print(harness.row("  stage: book (parse + apply)", r.pooled("book")))
-            if r.runs[0][1].parse is not None:
-                print(harness.row("    of which parse", r.pooled("parse")))
+            print(harness.row("  stage: book", r.pooled("book")))
             print(harness.row("  stage: decide + sign", r.pooled("decide_sign")))
         print()
 
