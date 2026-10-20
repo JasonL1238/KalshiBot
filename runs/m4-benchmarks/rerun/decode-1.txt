@@ -1,0 +1,30 @@
+decode: JSON decoders on Kalshi WebSocket frames
+commit: 8cea023
+platform: Linux-6.18.44-fc-v139-x86_64-with-glibc2.39, Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs
+python: CPython 3.13.16
+packages: orjson 3.13.0, msgspec 0.22.0
+replay processes pinned to CPUs sender 0, client 1, server 2 (separate cores, as the OS reports them; a VM can't see its host's)
+
+median frame bytes: orderbook_snapshot 1399, orderbook_delta 174, trade 233, fill 407
+
+ns per frame              orderbook_snapshot     orderbook_delta               trade                fill
+json (stdlib)                          10353                2983                3078                4196
+orjson                                  6401                 811                 938                1342
+msgspec untyped                         6633                 752                 911                1209
+msgspec typed structs                   6134                 490                 536                 788
+
+open-loop replay, steady (Poisson 2000/s), 40,000 frames, host CPU steal 0.3%
+decoder                                  n    mean µs        p50        p99      p99.9        max
+(harness floor)                     40,000       12.8        0.4      202.0     2219.7     4877.5
+json (stdlib)                       40,000       22.9        7.9      194.5     2947.4    11005.0
+orjson                              40,000       13.9        2.8       41.0     1987.5    14244.5
+msgspec untyped                     40,000        9.1        2.6       35.3     1638.0     4456.1
+msgspec typed structs               40,000        6.0        2.0       19.9     1198.7     4125.9
+
+open-loop replay, bursty (Poisson 1000/s + 200 at once every 200 ms), 40,000 frames, host CPU steal 0.2%
+decoder                                  n    mean µs        p50        p99      p99.9        max
+(harness floor)                     40,000       22.4        3.6      106.3      988.3     2936.5
+json (stdlib)                       40,000      209.8       33.3     1079.9     1336.6     4041.2
+orjson                              40,000       73.9       13.7      359.9      746.5     3627.0
+msgspec untyped                     40,000       73.5       13.2      370.0      520.7     4532.2
+msgspec typed structs               40,000       55.3       10.6      269.4      597.2     1844.2

@@ -1,0 +1,13 @@
+http_clients: order POSTs to a local TLS server
+commit: 8cea023
+platform: Linux-6.18.44-fc-v139-x86_64-with-glibc2.39, Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs
+python: CPython 3.13.16
+packages: httpx 0.28.1, h2 4.4.1, aiohttp 3.14.5, uvloop 0.22.1
+replay processes pinned to CPUs sender 0, client 1, server 2 (separate cores, as the OS reports them; a VM can't see its host's)
+
+open-loop orders (Poisson 200/s + 10 at once every 250 ms), 6 × 1,666 per client, host CPU steal 0.5%
+client                                   n    mean µs        p50        p99      p99.9        max  CPU µs/item
+(trigger lag, per write)            25,452       25.2       14.7      102.1     1960.2     5278.4
+httpx HTTP/1.1                       9,996     5729.8     2247.7    31536.8          —    60923.1       1617.0
+httpx HTTP/2                         9,996     3636.9     2072.3    15324.8          —    38683.6       1212.7
+aiohttp HTTP/1.1                     9,996      968.2      756.0     2710.3          —    13948.1        410.6

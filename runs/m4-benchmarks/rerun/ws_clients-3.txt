@@ -1,0 +1,35 @@
+ws_clients: event loops and WebSocket clients against a local replay
+commit: 8cea023
+platform: Linux-6.18.44-fc-v139-x86_64-with-glibc2.39, Intel(R) Xeon(R) Processor @ 2.10GHz, 4 CPUs
+python: CPython 3.13.16
+packages: websockets 17.2, aiohttp 3.14.5, picows 2.3.1, uvloop 0.22.1
+replay processes pinned to CPUs sender 0, client 1, server 2 (separate cores, as the OS reports them; a VM can't see its host's)
+
+open-loop replay, steady (Poisson 2000/s), 10 × 4,000 frames each, host CPU steal 0.3%
+client / loop                            n    mean µs        p50        p99      p99.9        max  CPU µs/item
+(sender lag, per write)            400,000       20.4       12.2       65.5     1785.1    14689.0
+websockets / asyncio                40,000      115.7       82.6      520.0     2504.5     4781.1         63.1
+websockets / uvloop                 40,000      104.3       75.4      343.1     2254.4     5742.3         54.8
+aiohttp / asyncio                   40,000       98.2       69.0      327.1     2394.2    14702.1         53.1
+aiohttp / uvloop                    40,000       84.1       58.4      319.5     1950.9     4506.1         40.5
+picows / asyncio                    40,000       82.6       52.9      353.7     2338.4    14481.8         34.2
+picows / uvloop                     40,000       75.1       47.3      386.4     2653.3     6468.2         26.3
+bare reader, callback / asyncio     40,000       85.4       55.7      286.1     2272.1    16933.9         36.8
+bare reader, callback / uvloop      40,000       82.3       50.8      305.4     3618.1    14835.7         27.9
+bare reader, queue hop / asyncio    40,000      101.3       68.8      468.3     2689.6     7559.1         50.2
+bare reader, queue hop / uvloop     40,000       95.5       58.5      522.4     3027.3    14973.2         39.4
+
+open-loop replay, bursty (Poisson 1000/s + 200 at once every 200 ms), 10 × 4,000 frames each, host CPU steal 0.4%
+client / loop                            n    mean µs        p50        p99      p99.9        max  CPU µs/item
+(sender lag, per write)            201,000       23.0       12.8       92.5     1816.1    18965.2
+websockets / asyncio                40,000      669.2      744.8     1859.7     2963.3    18699.7         45.6
+websockets / uvloop                 40,000      604.9      690.3     1815.9     2231.1     4317.6         39.2
+aiohttp / asyncio                   40,000      235.3      192.9      699.2     2199.4    19096.2         37.2
+aiohttp / uvloop                    40,000      243.5      179.7     1094.9     6938.2    21908.5         28.8
+picows / asyncio                    40,000      164.6      133.7      776.2     2059.5     5925.4         25.1
+picows / uvloop                     40,000      153.9      124.3      801.6     1985.1     7701.6         19.2
+bare reader, callback / asyncio     40,000      194.4      144.5      637.3     3375.5     3988.2         26.4
+bare reader, callback / uvloop      40,000      177.5      138.8      566.7     3261.0    12784.8         19.8
+bare reader, queue hop / asyncio    40,000      317.6      299.3      937.5     2897.4     6662.2         34.8
+bare reader, queue hop / uvloop     40,000      323.6      309.8     1424.4     2410.1     3928.9         29.2
+
