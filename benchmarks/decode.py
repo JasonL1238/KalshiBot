@@ -95,7 +95,8 @@ class StructFeed:
     """`kalshi.ws.BookFeed` for typed messages: the same books, sequence checks, and
     errors on well-formed input. (It parses before it checks the sequence, so a malformed
     price or size raises ValueError where BookFeed would advance the sequence first.)
-    `on_message` is `apply(parse(m))`, two steps so that P1 can time them apart."""
+    `on_message` is `apply(parse(m))`, two steps so that `hot_path.book_split_ns` can
+    time parsing alone."""
 
     def __init__(self) -> None:
         self.books: dict[str, OrderBook] = {}

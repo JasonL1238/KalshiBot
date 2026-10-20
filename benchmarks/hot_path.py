@@ -254,33 +254,32 @@ def book_split_ns(markets: int = 500, repeats: int = 7) -> dict[str, dict[str, f
     """P1's book stage in two parts, ns per frame, closed loop and outside the replays
     (timing them inside would add to P1's measured path): parse, the dollar and size
     strings to units (`StructFeed.parse`); apply, the OrderBook built from a snapshot's
-    levels or the BookSide updated by a delta. Median of `repeats` passes."""
+    levels or the BookSide updated by a delta, as in `StructFeed.apply` but without its
+    sequence check (bucketing messages by type breaks the sequence). Median of `repeats`
+    passes, each on fresh books."""
     msgs = [decode.typed_decoder.decode(f) for f in harness.Stream(10_000, markets).frames]
     snapshots = [m for m in msgs if type(m) is decode.SnapshotMsg]
     deltas = [m for m in msgs if type(m) is decode.DeltaMsg]
+    clock, parse = time.perf_counter_ns, decode.StructFeed.parse
     times: dict[tuple[str, str], list[float]] = {}
-
-    def timed(key: tuple[str, str], fn, items: list) -> list:
-        start = time.perf_counter_ns()
-        out = [fn(x) for x in items]
-        times.setdefault(key, []).append((time.perf_counter_ns() - start) / len(items))
-        return out
-
-    def build(parsed: tuple) -> OrderBook:
-        m, yes, no = parsed
-        return OrderBook(m.msg.market_ticker, yes, no)
-
     for _ in range(repeats):
-        books = {b.ticker: b for b in timed(("snapshot", "apply"), build, timed(
-            ("snapshot", "parse"), decode.StructFeed.parse, snapshots))}
-
-        def update(parsed: tuple, books=books) -> None:
-            m, price, delta = parsed
+        t0 = clock()
+        parsed = [parse(m) for m in snapshots]
+        t1 = clock()
+        books = {m.msg.market_ticker: OrderBook(m.msg.market_ticker, yes, no)
+                 for m, yes, no in parsed}
+        t2 = clock()
+        updates = [parse(m) for m in deltas]
+        t3 = clock()
+        for m, price, delta in updates:
             book = books[m.msg.market_ticker]
             (book.yes if m.msg.side == "yes" else book.no).apply(price, delta)
-
-        timed(("delta", "apply"), update, timed(("delta", "parse"), decode.StructFeed.parse,
-                                                deltas))
+        t4 = clock()
+        for key, ns, count in ((("snapshot", "parse"), t1 - t0, len(snapshots)),
+                               (("snapshot", "apply"), t2 - t1, len(snapshots)),
+                               (("delta", "parse"), t3 - t2, len(deltas)),
+                               (("delta", "apply"), t4 - t3, len(deltas))):
+            times.setdefault(key, []).append(ns / count)
     out: dict[str, dict[str, float]] = {}
     for (kind, step), ns in times.items():
         out.setdefault(kind, {})[step] = statistics.median(ns)
