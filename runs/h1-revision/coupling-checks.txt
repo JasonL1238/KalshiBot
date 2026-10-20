@@ -1,0 +1,146 @@
+== ra.py shock (8 worlds, SeedSequence(5))
+shock                R        R_cand      
+            mean    max   mean   max
+config                              
+no ≤ 2000  1.156  1.185   0.61  0.62
+== ra.py plain (8 worlds, SeedSequence(5))
+plain                R        R_cand       
+            mean    max   mean    max
+config                               
+no ≤ 2000  1.163  1.185  0.614  0.619
+== ra.py h1 (8 worlds, SeedSequence(5))
+h1                R        R_cand       
+            mean    max   mean    max
+config                               
+no ≤ 1000  0.608  0.621  0.437  0.444
+no ≤ 1500  0.880  0.906  0.540  0.547
+no ≤ 2000  1.018  1.037  0.567  0.572
+no ≤ 300   0.086  0.090  0.082  0.086
+no ≤ 500   0.234  0.242  0.207  0.214
+== ra.py strikes (8 worlds, SeedSequence(5))
+strikes                R        R_cand       
+            mean    max   mean    max
+config                               
+no ≤ 2000  0.625  0.641  0.579  0.593
+== ra.py binaries (8 worlds, SeedSequence(5))
+binaries               R       R_cand       
+           mean   max   mean    max
+config                             
+no ≤ 2000  0.95  0.97  0.785  0.793
+== rb.py shock (8 worlds, SeedSequence(5))
+shock                R        R_cand       
+            mean    max   mean    max
+config                               
+no ≤ 2000  1.156  1.185  0.854  0.864
+== rb.py plain (8 worlds, SeedSequence(5))
+plain                R        R_cand       
+            mean    max   mean    max
+config                               
+no ≤ 2000  1.163  1.185  0.856  0.866
+== rb.py h1 (8 worlds, SeedSequence(5))
+h1                R        R_cand       
+            mean    max   mean    max
+config                               
+no ≤ 1000  0.608  0.621  0.548  0.554
+no ≤ 1500  0.880  0.906  0.702  0.711
+no ≤ 2000  1.018  1.037  0.772  0.783
+no ≤ 300   0.086  0.090  0.088  0.092
+no ≤ 500   0.234  0.242  0.241  0.249
+== rb.py strikes (8 worlds, SeedSequence(5))
+strikes                R        R_cand       
+            mean    max   mean    max
+config                               
+no ≤ 2000  0.625  0.641  0.579  0.593
+== rb.py binaries (8 worlds, SeedSequence(5))
+binaries               R       R_cand       
+           mean   max   mean    max
+config                             
+no ≤ 2000  0.95  0.97  0.785  0.793
+== rc.py shock (8 worlds, SeedSequence(5))
+shock                R        R_cand       
+            mean    max   mean    max
+config                               
+no ≤ 2000  1.156  1.185  1.017  1.028
+== rc.py plain (8 worlds, SeedSequence(5))
+plain                R        R_cand       
+            mean    max   mean    max
+config                               
+no ≤ 2000  1.163  1.185  1.017  1.026
+== rc.py h1 (8 worlds, SeedSequence(5))
+h1                R        R_cand       
+            mean    max   mean    max
+config                               
+no ≤ 1000  0.608  0.621  1.018  1.024
+no ≤ 1500  0.880  0.906  1.047  1.055
+no ≤ 2000  1.018  1.037  1.052  1.061
+no ≤ 300   0.086  0.090  0.545  0.556
+no ≤ 500   0.234  0.242  0.846  0.854
+== rc.py strikes (8 worlds, SeedSequence(5))
+strikes                R        R_cand      
+            mean    max   mean   max
+config                              
+no ≤ 2000  0.625  0.641  0.635  0.65
+== rc.py binaries (8 worlds, SeedSequence(5))
+binaries               R       R_cand       
+           mean   max   mean    max
+config                             
+no ≤ 2000  0.95  0.97  0.977  0.978
+== rd.py shock (8 worlds, SeedSequence(5))
+shock                R        R_cand       
+            mean    max   mean    max
+config                               
+no ≤ 2000  1.156  1.185  0.722  0.734
+== rd.py plain (8 worlds, SeedSequence(5))
+plain                R        R_cand       
+            mean    max   mean    max
+config                               
+no ≤ 2000  1.163  1.185  0.724  0.732
+== rd.py h1 (8 worlds, SeedSequence(5))
+h1                R        R_cand       
+            mean    max   mean    max
+config                               
+no ≤ 1000  0.608  0.621  0.853  0.857
+no ≤ 1500  0.880  0.906  0.807  0.811
+no ≤ 2000  1.018  1.037  0.734  0.741
+no ≤ 300   0.086  0.090  0.491  0.503
+no ≤ 500   0.234  0.242  0.759  0.767
+== rd.py strikes (8 worlds, SeedSequence(5))
+strikes                R        R_cand      
+            mean    max   mean   max
+config                              
+no ≤ 2000  0.625  0.641  0.635  0.65
+== rd.py binaries (8 worlds, SeedSequence(5))
+binaries               R       R_cand       
+           mean   max   mean    max
+config                             
+no ≤ 2000  0.95  0.97  0.977  0.978
+== cand_e.py shock (8 worlds, SeedSequence(5))
+shock                R          Rbar           R_E       
+            mean    max   mean    max   mean    max
+config                                             
+no ≤ 2000  1.156  1.185  1.585  1.656  1.058  1.059
+== cand_e.py plain (8 worlds, SeedSequence(5))
+plain                R         Rbar           R_E       
+            mean    max  mean    max   mean    max
+config                                            
+no ≤ 2000  1.163  1.185  1.59  1.626  1.058  1.059
+== cand_e.py h1 (8 worlds, SeedSequence(5))
+h1                R          Rbar           R_E       
+            mean    max   mean    max   mean    max
+config                                             
+no ≤ 1000  0.608  0.621  0.668  0.682  1.104  1.106
+no ≤ 1500  0.880  0.906  1.058  1.086  1.102  1.106
+no ≤ 2000  1.018  1.037  1.360  1.391  1.107  1.109
+no ≤ 300   0.086  0.090  0.086  0.091  1.239  1.253
+no ≤ 500   0.234  0.242  0.239  0.248  1.127  1.131
+== cand_e.py strikes (8 worlds, SeedSequence(5))
+strikes                R          Rbar           R_E       
+            mean    max   mean    max   mean    max
+config                                             
+no ≤ 2000  0.625  0.641  0.808  0.824  0.773  0.786
+== cand_e.py binaries (8 worlds, SeedSequence(5))
+binaries               R        Rbar        R_E     
+           mean   max  mean   max mean  max
+config                                     
+no ≤ 2000  0.95  0.97  0.95  0.97  1.0  1.0
+CHECKSDONE

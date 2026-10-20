@@ -8,4 +8,10 @@ h1-D-power-3-0.25 rc=0 wall=397s args=power 0.25 --only 'YES' --repeated h1-D
 h1-D-power-4-0.25 rc=0 wall=231s args=power 0.25 --only 'mixed' --repeated h1-D
 h1-D-power-5-0.25 rc=0 wall=1721s args=power 0.25 --only 'makers:' --repeated h1-D
 h1-D-power-6-0.25 rc=0 wall=1924s args=power 0.25 --only 'H1-shaped:' --repeated h1-D
-ALLDONE
+h1-C-h1-0.25 rc=0 wall=13913s args=0.25 --only 'H1-shaped:' --repeated h1-C
+h1-C-power-1-0.25 rc=0 wall=1081s args=power 0.25 --only '0.5¢' --repeated h1-C
+h1-C-power-2-0.25 rc=0 wall=399s args=power 0.25 --only '1¢' --repeated h1-C
+h1-C-power-3-0.25 rc=0 wall=195s args=power 0.25 --only 'YES' --repeated h1-C
+h1-C-power-4-0.25 rc=0 wall=123s args=power 0.25 --only 'mixed' --repeated h1-C
+h1-C-power-5-0.25 rc=0 wall=929s args=power 0.25 --only 'makers:' --repeated h1-C
+h1-C-power-6-0.25 rc=0 wall=1084s args=power 0.25 --only 'H1-shaped:' --repeated h1-C
