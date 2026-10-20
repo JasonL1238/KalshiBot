@@ -66,11 +66,11 @@ at e20d5df, before the merge reviews changed the scripts, stay in `runs/m4-bench
   to separate cores, as the guest OS reports them (a VM can't see its host's).
 - **Host noise.** The hypervisor steals 0.2–0.6% of CPU time, in stalls of up to over
   100 ms. Each output prints the harness floor (a no-op) or the sender's own lag next to
-  its rows (their max reached 133 ms once), and CPU steal per table. **What holds in every run: each table's chosen row beats
-  the others on its measure, and P1 beats the incumbent on CPU per frame and on every
-  p50.** Other figures are medians of the three runs, with per-run ranges where they
-  matter. Read p99.9 and max as host-bound here; the tails come from the us-east-2 run
-  (ROADMAP M4).
+  its rows (their max reached 133 ms once), and CPU steal per table. **What holds in
+  every run: each table's chosen row beats the others on its measure, and P1 beats the
+  incumbent on CPU per frame and on every p50.** Other figures are medians of the three
+  runs, with per-run ranges where they matter. Read p99.9 and max as host-bound here;
+  the tails come from the us-east-2 run (ROADMAP M4).
 
 ### Decoding (`decode.py`)
 
