@@ -39,10 +39,11 @@ P1 is the pure-Python hot path, P2 the book in Rust, P3 NautilusTrader).
 
 Every script in `benchmarks/` but book.py ran three times at commit 8cea023 on one host:
 a cloud VM, Linux 6.18 (Firecracker guest), Intel Xeon @ 2.10 GHz, 4 vCPUs, CPython
-3.13.16, with gc_pauses also once on 3.14.6 and 3.14.6t. The command and the raw outputs,
-each with its commit, platform and package versions, are in `runs/m4-benchmarks/rerun/`
-(`rerun.md`). Tables give the median of the three runs. The same command's earlier runs
-at e20d5df, before the merge reviews changed the scripts, stay in `runs/m4-benchmarks/`.
+3.13.16, with gc_pauses also once on 3.14.6 and 3.14.6t. The command and the raw
+outputs, each with its commit, platform and package versions, are in
+`runs/m4-benchmarks/rerun/` (`rerun.md`). Tables give the median of the three runs. The
+same command's earlier runs at e20d5df, before the merge reviews changed the scripts,
+stay in `runs/m4-benchmarks/`.
 
 ### Method
 
@@ -66,11 +67,12 @@ at e20d5df, before the merge reviews changed the scripts, stay in `runs/m4-bench
   to separate cores, as the guest OS reports them (a VM can't see its host's).
 - **Host noise.** The hypervisor steals 0.2–0.6% of CPU time, in stalls of up to over
   100 ms. Each output prints the harness floor (a no-op) or the sender's own lag next to
-  its rows (their max reached 133 ms once), and CPU steal per table. **What holds in
-  every run: each table's chosen row beats the others on its measure, and P1 beats the
-  incumbent on CPU per frame and on every p50.** Other figures are medians of the three
-  runs, with per-run ranges where they matter. Read p99.9 and max as host-bound here;
-  the tails come from the us-east-2 run (ROADMAP M4).
+  its rows (their max reached 133 ms once), and CPU steal per table. Read p99.9 and max
+  as host-bound here; the tails come from the us-east-2 run (ROADMAP M4).
+- **What holds in every run:** each table's chosen row beats the others on its measure,
+  and P1 beats the incumbent on CPU per frame and on every end-to-end p50 (not on every
+  stage: its book stage is no faster). Other figures are medians of the three runs, with
+  per-run ranges where they matter.
 
 ### Decoding (`decode.py`)
 
@@ -85,9 +87,9 @@ mean 29 µs, p50 3.6 µs):
 | msgspec untyped | 6,633 | 773 | 924 | 1,222 | 74 | 13.0 |
 | **msgspec typed structs (chosen)** | 6,115 | 490 | 536 | 788 | 55 | 10.6 |
 
-Typed structs are fastest on every message type in every run: at the median, 1.7×
-orjson on deltas and 6.1× stdlib json. They also validate the schema while decoding,
-and with `gc=False` they are objects the collector never tracks (see GC).
+Typed structs are fastest on every message type in every run: at the median, 1.7× orjson
+on deltas and 6.1× stdlib json. They also validate the schema while decoding, and with
+`gc=False` they are objects the collector never tracks (see GC).
 
 ### Signing (`sign.py`)
 
@@ -184,8 +186,8 @@ benchmark, since CloudFront's handling of HTTP/2 can't be simulated locally.
 
 **Call `gc.freeze()` once startup state is loaded, keep the hot path on `gc=False`
 structs, and leave the collector enabled** (disabling it lets any accidental cycle
-leak). Free-threading brings nothing to this single-threaded hot path, and a forced
-full collection there stays costly after freeze.
+leak). Free-threading brings nothing to this single-threaded hot path, and a forced full
+collection there stays costly after freeze.
 
 ### P1: the pure-Python hot path (`hot_path.py`)
 
@@ -194,7 +196,8 @@ buy at the ask when a market's ask first drops a tick below its first snapshot's
 fired 135 times per 10,000 frames over 50 markets, 286 over the reconnect's 500. Each
 order is signed, serialized and POSTed to the local TLS server without blocking the
 feed, and both stacks must make identical decisions.
-- **Incumbent:** asyncio, websockets via `kalshi.ws.Connection`, json, `BookFeed`, httpx.
+- **Incumbent:** asyncio, websockets via `kalshi.ws.Connection`, json, `BookFeed`,
+  httpx.
 - **P1:** the chosen row of each table above: uvloop, picows, msgspec structs into
   `StructFeed` (the same `OrderBook`), Ed25519, aiohttp, and `gc.freeze()`.
 
@@ -223,10 +226,12 @@ Bursts are 200 frames, and the reconnect's is the 500 snapshots, one per replay.
   - decode and book: 2.4 and 10.4 µs;
   - deciding, signing and POSTing 1.35 orders per 100 frames: about 7.2 µs;
   - the rest, about 3 µs: the stack's own overhead and its timing.
-- **The book stage is mostly parsing.** Timed apart in a closed loop (`hot_path.py`
-  prints it first), turning dollar and size strings into units is 65% of a delta's book
-  stage (1.5 of 2.3 µs) and 64% of a snapshot's (87 of 136 µs); the rest builds or
-  updates the `OrderBook`. Closed loop and hot, these are shares, not in-replay costs.
+- **The book stage is mostly parsing,** and P1's is no faster than the incumbent's (it
+  was slower steady in every run, 10.3 against 9.7 µs at the median). Timed apart in a
+  closed loop (`hot_path.py` prints it first), turning dollar and size strings into
+  units is 65% of a delta's book stage (1.5 of 2.3 µs) and 64% of a snapshot's (87 of
+  136 µs); the rest builds or updates the `OrderBook`. Closed loop and hot, these are
+  shares, not in-replay costs.
 - **Decide + sign** costs 100–135 µs per order, 2.6–3.5× signing's hot-loop figure,
   above what `sign.py`'s in-context runs show. Deciding and encoding the body add a few
   µs, and the rest of the gap is unexplained.
@@ -235,9 +240,9 @@ Bursts are 200 frames, and the reconnect's is the 500 snapshots, one per replay.
 - **A reconnect is the worst case measured.** 500 snapshots at once take P1 73 ms to
   drain (146 µs a snapshot, nearly all of it the book stage), and every frame behind
   them waits.
-- **One book feed for M5.** `decode.StructFeed` is P1's prototype of `kalshi.ws.BookFeed`
-  for typed messages, kept equal to it by the decoder-agreement test; it folds into
-  kalshi/ws.py with whichever stack wins.
+- **One book feed for M5.** `decode.StructFeed` is P1's prototype of
+  `kalshi.ws.BookFeed` for typed messages, kept equal to it by the decoder-agreement
+  test; it folds into kalshi/ws.py with whichever stack wins.
 
 ### Reading, from P1 alone
 
@@ -245,11 +250,12 @@ The decision rule: Python holds if the hot path's p99.9 under bursts is at most 
 the end-to-end p99.9 (the order round trip), and a native stage is worth its cost only
 where it brings a failing hot path under that line. On this host the rule is **not
 decidable**, and the reading stays provisional until the us-east-2 run:
-- P1's bursty p99.9 was 3.2, 3.7 and 4.0 ms across the three runs, and 3.6, 3.7 and 20 ms
-  in the earlier runs at e20d5df: host-bound (Method).
-- The round trip's p99.9 isn't measured. Azure East US's typical 12–17 ms (Hosting) is
-  only a lower bound on it, so the 10% line is at least 1.2–1.7 ms, which P1's bursty
-  p99.9 doesn't clear on that bound alone.
+- P1's bursty p99.9 was 3.2, 3.7 and 4.0 ms across the three runs, and 3.6, 3.7 and
+  20 ms in the earlier runs at e20d5df: host-bound (Method).
+- The round trip's p99.9 isn't measured. Azure East US's costed 12–17 ms (Hosting) is
+  only a lower bound on an Azure host's p99.9: from there the 10% line would be at least
+  1.2–1.7 ms, which P1's bursty p99.9 doesn't clear on that bound alone. From us-east-2,
+  next to Kalshi, the round trip is shorter, so the line is lower still.
 - The reconnect fails the rule: P1's p99.9 through it is 84 ms.
 - In the first e20d5df run, P1's bursty p99.9 (20.2 ms) lost to the incumbent's (9.0 ms)
   with normal steal (0.5%) and sender lag (p99.9 1.9 ms). That is unexplained; in every
@@ -259,8 +265,7 @@ decidable**, and the reading stays provisional until the us-east-2 run:
 What a native book could save, from the p50s above: at most about 1 ms on a 200-frame
 burst's last frame (the book stage's 5.4 µs × 200), and only if parsing moves native
 too, since parsing is two thirds of the stage. Decode is msgspec's C code already. On
-the reconnect the same stage is most of the 73 ms, which is where P2 (the book, with its
-fixed-point parsing, in Rust) would be measured first. The remaining M4 work, P2 and P3
+the reconnect the same stage is most of the 73 ms. The remaining M4 work, P2 and P3
 among it, is ROADMAP's M4 item.
 
 ## Hosting (decided in M4)
