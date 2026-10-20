@@ -9,13 +9,13 @@ rests at a time.
 
 - Universe: the game-winner series in `LEAGUES`, in events that show exactly two markets,
   mutually exclusive, at the decision.
-- Live: from the game's listed start until its league's cap. No as-listed column gives
-  the start. A listing counts only if `latest_expiration_time` less one of its league's
-  offsets (`League.offsets`, whole 24-hour days) lands on the game's Eastern date (the
-  event ticker's YYMONDD). Its start is then the ticker's own time where it gives one
-  (YYMONDDHHMM, US Eastern; Kalshi's expirations sometimes count from a placeholder
-  hour), and that landing point otherwise. Listings with no offset landing (a 730-day
-  expiration) or no date in the ticker get no bids; their count is logged.
+- Live: from the game's listed start until its league's cap (how Kalshi lists starts:
+  docs/RESEARCH.md §1, Data formats). A listing counts only if `latest_expiration_time`
+  less one of its league's offsets (`League.offsets`, whole 24-hour days) lands on the
+  game's Eastern date (the event ticker's YYMONDD). Its start is then the ticker's own
+  time where it gives one (YYMONDDHHMM, US Eastern), and that landing point otherwise.
+  Listings with no offset landing (a 730-day expiration) or no date in the ticker get no
+  bids; their count is logged.
 - Reference: the market's last instant (one created_time, block trades aside) in the
   `max_hold` before the tick, priced where it ended: its highest YES price if takers
   bought YES, its lowest if they sold, the middle of its range if both. No print, no bid.
@@ -45,7 +45,7 @@ class League(NamedTuple):
     offsets: tuple[int, ...]  # whole days from start to latest_expiration_time; each is tried
 
 
-# The universe, provisional until registration fixes the leagues by its rule.
+# The universe of H8 v2's discovery trial (docs/STRATEGIES.md H8).
 LEAGUES = {
     "KXMLBGAME": League(timedelta(hours=5), (14, 3)),
     "KXNCAAMBGAME": League(timedelta(hours=3), (14, 2)),

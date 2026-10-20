@@ -78,7 +78,8 @@ exchange. Whether it makes money is a result to measure, not an assumption.
       (built), then the maker world in conformance and the Maker null that passes it
       (measured 2026-10; [BACKTESTING](BACKTESTING.md) step 6 and Conformance, Makers);
       before a maker family registers, the checks of BACKTESTING's pre-registration
-      paragraph; H8's gate count is done ([STRATEGIES](STRATEGIES.md) H8);
+      paragraph; H8's gate count is done and its v2 parked ([STRATEGIES](STRATEGIES.md)
+      H8);
     - external data keyed by when it became available;
     - latency as a pre-registered parameter: PnL against latency, a negative-latency
       canary, a time-shift placebo;

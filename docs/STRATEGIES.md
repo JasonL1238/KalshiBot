@@ -191,6 +191,42 @@ What these families share:
   without NCAAF. Deep sweeps grew in props, spreads, totals and new leagues, which H8's
   evidence didn't come from. User ruling (2026-10-15): keep H8, with its leagues fixed
   at registration.
+- **v2 (2026-10), parked.** The design approved for discovery: while a game winner is
+  live, a one-contract NO bid 20¢ under each team market's last trade, requoted every
+  10 s, in MLB, NCAAMB, NHL and WNBA (`strategies/deep_bids.py`); minimum edge 3¢. Its
+  discovery run is recorded (`ledger/H8.jsonl`): 2,704 fills, +7.2¢ a fill net at the
+  fee rate. Two provisional checks on forward days 2026-10-01..13
+  (`data/exploration/2026-10-h8v2/forward-check/` and `two-book/`, local only) fixed
+  each declared definition before counting and read no forward outcome or PnL. The
+  second check's after-fill counts (the other team market's move in the 2 or 10 s after
+  a fill) do amount to a coarse markout of the position, on which the user has yet to
+  rule. They found:
+  - The league rule fixed before the counts (listed starts at least 95% within 5 minutes
+    of ESPN in discovery and forward; a discovery edge of at least 6¢ on at least 50
+    games with fills; forward sweeps at least 0.5× the same days of 2025) would keep
+    only WNBA so far. MLB can't reach 95% (three postseason games played at other times
+    than listed, [RESEARCH §1](RESEARCH.md): 18 of 21 forward starts, at best 35 of 38);
+    MLB (0.49×) and NHL (0.28×) fail on sweeps; NCAAMB had no forward game yet.
+  - In discovery (MLB, NHL and WNBA), fills where the other team market's YES price fell
+    10¢ or more between 10 s before and 10 s after the fill lost 4.0¢ each, and the
+    rest earned 12.7¢ (a split found after looking). Such fills are 75% of forward fills
+    against 38% on the same days of 2025. If each kind kept its discovery edge, which
+    the counts can't test, the forward edge would be +0.2¢ a fill (90% interval −2.3 to
+    +2.4¢), at which the confirmation test would pass under 1% of the time over 2027.
+    That reading is fragile, and depends on the definition and the weighting: only 1 of
+    the 5 neighbouring definitions gives it (the others project +1.0 to +2.5¢),
+    weighting by the forward league mix gives +0.9¢, and counting the other team
+    market's 20¢ fall in the 10 s before the fill instead gives +4.5¢ (90% +2.4 to
+    +6.5). Both carry-over checks inside discovery point lower: the projection
+    overstated late discovery by 4.3¢ and October 2025 by 2.1¢.
+
+  A later H8 version discloses v2's trial and these checks. One candidate, pulling bids
+  when the other team market moves, needs cancel latency Tier 1 can't model, so it waits
+  for recorded books and our measured latency ([ROADMAP](ROADMAP.md) M4).
+
+  User ruling (2026-10-19): v2 is parked, not registered, so H8's one confirmation stays
+  unspent; the decisive run declared for forward days through 2026-11-25 can still run,
+  as information only.
 
 #### H9 decided outcomes, externally triggered
 - **Mechanism.** After an external trigger that the result is decided (ESPN end of

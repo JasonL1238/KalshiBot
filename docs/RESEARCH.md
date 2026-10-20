@@ -94,6 +94,30 @@ API keys, so use it for all execution testing.
   `trade_id` doesn't order an instant's prints: in id order, the next print was as often a
   better level as a worse one (2025-06-02 and 2026-10-13 tapes). The API lists an
   instant's prints by `trade_id`, descending (those tapes and 2023-03-01's).
+- **No as-listed column states a sports game's start** (`occurrence_datetime` and
+  `expected_expiration_time` are post-hoc: `research/load.py`). In H8's four game-winner
+  series (KXMLBGAME, KXNCAAMBGAME, KXNHLGAME, KXWNBAGAME) it comes from
+  `latest_expiration_time`, the scheduled start plus whole 24-hour days, or from the
+  event ticker where that carries the time (2026-10-19; 97d3b7a and
+  `data/exploration/2026-10-h8v2/forward-check/`, local only):
+  - 14 days until each league switched: MLB to 3 from its first 2026 game; WNBA, NHL
+    and NCAAMB to 2 for listings created after a switch within (UTC) 2026-07-21..27,
+    06-10..09-17 and 04-03..10-14 respectively, so their games of January to July 2026
+    still carry 14. Checked against ESPN in 2025 and forward, except NCAAMB's 2 days:
+    its first four such listings land at 00:00 and 09:30 ET, which may be placeholders.
+  - 730 days in 2025 for every listed MLB game of 04-16..08-01 (created only 0.1–1.8
+    days ahead), NHL game of 04-19..06-17 (the playoffs) and WNBA game of 05-22..08-03.
+  - MLB event tickers carry the start in ET since 2026 (`26APR161235`). For 286 of its
+    298 events dated 2026-03-25..04-17 the expiration counts from a 10:00 or 01:00 ET
+    placeholder instead, as it did from 04:00 ET for eleven 2025 postseason games (and
+    four listings of undecided matchups).
+  - Three 2026 MLB postseason games were played at other times than listed (moved, or
+    listed before the time was set); their listings kept the listed times.
+
+  Other sports series weren't checked against a schedule. Among listings dated from
+  2026-09, most series use 2 days, while tennis, e-sports and darts keep 14 and table
+  tennis uses 7, and some put the time in the ticker; in 2025, NBA, NFL, NCAAF, MLS,
+  UFC and tennis also used 730.
 - Each market has `price_ranges` (`{start, end, step}`) defining legal tick sizes; some
   markets have sub-penny ticks near 0 and 1. Snap order prices to `step`.
 - The orderbook returns **bids only** for YES and NO, ascending. Best YES ask = 1 − best NO bid.
