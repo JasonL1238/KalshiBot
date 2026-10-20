@@ -71,8 +71,8 @@ stay in `runs/m4-benchmarks/`.
   as host-bound here; the tails come from the us-east-2 run (ROADMAP M4).
 - **What holds in every run:** each table's chosen row beats the others on its measure,
   and P1 beats the incumbent on CPU per frame and on every end-to-end p50 (not on every
-  stage: its book stage is no faster). Other figures are medians of the three runs, with
-  per-run ranges where they matter.
+  stage; see P1). Other figures are medians of the three runs, with per-run ranges
+  where they matter.
 
 ### Decoding (`decode.py`)
 
