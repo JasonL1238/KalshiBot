@@ -99,14 +99,17 @@ def test_fee_schedule_from_tables(loader):
     assert schedule.terms("SA", D(2025, 12, 1)).taker == 0  # SA → multiplier 0 on Nov 1
 
 
-def test_confirmation_windows():
+def test_confirmation_windows(monkeypatch):
     assert calendar.confirmation_window("H9") == (calendar.BECKER_END, calendar.LOCKBOX_START)
-    assert calendar.confirmation_window("H1") == calendar.FORWARD_TESTS["H1"]
-    calendar.STUDY_END["HX"] = D(2026, 1, 1)
-    try:
-        assert calendar.confirmation_window("HX")[0] == D(2026, 1, 1)
-        calendar.STUDY_END["HX"] = calendar.LOCKBOX_START
-        with pytest.raises(ValueError, match="forward"):  # nothing left before the lockbox
-            calendar.confirmation_window("HX")
-    finally:
-        del calendar.STUDY_END["HX"]
+    with pytest.raises(ValueError, match="withdrawn"):
+        calendar.confirmation_window("H1")
+    monkeypatch.setattr(calendar, "FORWARD", calendar.FORWARD | {"HF"})
+    with pytest.raises(ValueError, match="register"):  # forward, its stretch not yet fixed
+        calendar.confirmation_window("HF")
+    monkeypatch.setitem(calendar.FORWARD_TESTS, "HF", (D(2026, 10, 15), D(2027, 2, 15)))
+    assert calendar.confirmation_window("HF") == (D(2026, 10, 15), D(2027, 2, 15))
+    monkeypatch.setitem(calendar.STUDY_END, "HX", D(2026, 1, 1))
+    assert calendar.confirmation_window("HX")[0] == D(2026, 1, 1)
+    monkeypatch.setitem(calendar.STUDY_END, "HX", calendar.LOCKBOX_START)
+    with pytest.raises(ValueError, match="forward"):  # nothing left before the lockbox
+        calendar.confirmation_window("HX")

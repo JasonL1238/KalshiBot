@@ -9,6 +9,7 @@ embargoes): docs/ROADMAP.md, Research calendar.
     lockbox       [LOCKBOX_START, FORWARD_START) opened once for all survivors, logged
     forward       [FORWARD_START, ...)           paper and live-book tests
     forward test  FORWARD_TESTS[h]               instead of confirmation, for h in FORWARD
+                                                 (none for a withdrawn h: WITHDRAWN)
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ FORWARD_START = datetime(2026, 10, 1, tzinfo=UTC)
 # the latest at pre-registration (M3); a hypothesis absent here has S_h = B, and a forward
 # one needs no entry unless its study is why it is forward.
 STUDY_END: dict[str, datetime] = {
-    "H1": datetime(2026, 3, 12, tzinfo=UTC),  # why H1 is confirmed forward (STRATEGIES H1)
+    "H1": datetime(2026, 3, 12, tzinfo=UTC),  # why H1 was registered forward (STRATEGIES H1)
     "H2": datetime(2026, 3, 12, tzinfo=UTC),  # Bartlett & O'Hara (STRATEGIES H2, H8)
     "H8": datetime(2026, 3, 12, tzinfo=UTC),
 }
@@ -36,9 +37,10 @@ STUDY_END: dict[str, datetime] = {
 # Hypotheses confirmed on a stretch of the forward window instead (rules: docs/ROADMAP.md,
 # Research calendar), and those stretches, each fixed at registration and starting after it.
 FORWARD = frozenset({"H1", "H5", "H11"})
-FORWARD_TESTS: dict[str, tuple[datetime, datetime]] = {
-    "H1": (datetime(2026, 10, 15, tzinfo=UTC), datetime(2027, 2, 15, tzinfo=UTC)),
-}
+FORWARD_TESTS: dict[str, tuple[datetime, datetime]] = {}
+# Hypotheses withdrawn before their test: never confirmed, so they get no verdict, and a
+# forward one keeps its α/12 unspent (docs/ROADMAP.md, Research calendar).
+WITHDRAWN = frozenset({"H1"})
 
 
 def confirmation_start(hypothesis: str) -> datetime:
@@ -47,6 +49,8 @@ def confirmation_start(hypothesis: str) -> datetime:
 
 def confirmation_window(hypothesis: str) -> tuple[datetime, datetime]:
     """Where the hypothesis has its one confirmation test."""
+    if hypothesis in WITHDRAWN:
+        raise ValueError(f"{hypothesis} is withdrawn: it has no confirmation test")
     if hypothesis in FORWARD:
         if hypothesis not in FORWARD_TESTS:
             raise ValueError(f"{hypothesis} is confirmed forward; register its window first")

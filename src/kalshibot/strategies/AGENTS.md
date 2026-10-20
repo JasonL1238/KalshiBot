@@ -8,7 +8,7 @@ enforces it). Hypotheses, pre-registrations and verdicts:
 | File | What |
 |------|------|
 | `base.py` | `Strategy` (family, `max_hold`, `min_edge`, configurations, intents) and `MarketData` protocols; `INTENT_COLUMNS`, the intent schema every tier takes |
-| `favorite_longshot.py` | H1: buy the favorite's side as a taker at the day's first print past a threshold |
+| `favorite_longshot.py` | H1 (withdrawn, not in `FAMILIES`): buy the favorite's side as a taker at the day's first print past a threshold; one H1-shaped conformance row takes its NO cutoffs |
 | `deep_bids.py` | H8: while a game winner is live, a NO bid on each team market a fixed depth under its last trade, requoted on a fixed clock; `LEAGUES` is the universe |
 
 `FAMILIES` (`__init__.py`) maps each family to its strategy; `kalshibot research` finds

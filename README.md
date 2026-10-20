@@ -18,10 +18,10 @@ rules: [AGENTS.md](AGENTS.md).
 kalshibot markets --series KXHIGHNY      # live top of book for one series
 kalshibot backfill reference             # series, events, non-combo markets, fees, incentive programs
 kalshibot backfill trades --start YYYY-MM-DD --end YYYY-MM-DD   # trade tape by UTC day
-kalshibot research discover H1           # a family's configurations on discovery, logged
-kalshibot research candles H1            # the quotes its confirmation test needs
-kalshibot research confirm H1            # its one confirmation test (once its window ends)
-kalshibot research report H1             # Tier 2 on that confirmation, again
+kalshibot research discover FAMILY       # a family's configurations on discovery, logged
+kalshibot research candles FAMILY        # the quotes its confirmation test needs
+kalshibot research confirm FAMILY        # its one confirmation test (once its window ends)
+kalshibot research report FAMILY         # Tier 2 on that confirmation, again
 ```
 
 Market data uses Kalshi's public endpoints and needs no account. Recording live order

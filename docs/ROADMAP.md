@@ -44,23 +44,18 @@ exchange. Whether it makes money is a result to measure, not an assumption.
   - Each confirmation records its power at the family's smallest meaningful edge
     (checked in conformance) and its results by category, and gets a Tier-2 report
     after its verdict.
-  - Revised methods ([BACKTESTING](BACKTESTING.md) step 6, Conformance): for H1, one
-    that passes every H1-shaped row in the size table and the third; and
-    `gauntlet.power` revised for the bold rows of the third table.
-  - Before H1's confirmation test: H1-shaped taker rows in conformance (repeated
-    positions on one contract, nested or sliding on one draw as the null prices them):
-    measured 2026-10-15 ([BACKTESTING](BACKTESTING.md), Conformance), so H1's
-    confirmation waits for its revised method (above). Then H1's coupling R check
-    ([BACKTESTING](BACKTESTING.md), the pre-registration paragraph), its R̄ computed by
-    the runner: `_coupling`'s R̄ half moved to `null.py`, looking up only the quotes its
-    strike terms need, contract i at time t_j for each i before j in a cluster
-    (`quotes.needed` and `mids` fetch them; a contract settled by t_j counts 0); buckets
-    need none. A bucket-heavy H1's R̄ may exceed every measured row's R, and then a
-    higher-coupling row runs first, as the rule says.
+  - `gauntlet.power` revised for the bold rows of the third table
+    ([BACKTESTING](BACKTESTING.md) step 6), before any confirmation.
+  - Before an H1-shaped family's confirmation test ([BACKTESTING](BACKTESTING.md) step 6
+    and the pre-registration paragraph): a revised method that passes every H1-shaped
+    row in the size table and the third, and its coupling R check, its R̄ computed by
+    the runner (`_coupling`'s R̄ half moved to `null.py`, looking up only the quotes its
+    strike terms need, contract i at time t_j for each i before j in a cluster;
+    `quotes.needed` and `mids` fetch them, a contract settled by t_j counts 0, and
+    buckets need none).
   - Tier-1 taker fills held near the decision-time ask, as a real IOC order fills (a floor
     as well as the limit, and a shorter wait; [BACKTESTING](BACKTESTING.md#fill-models)):
-    `fills.py`'s default for families registered after the change. H1 keeps the rule it
-    registered with.
+    `fills.py`'s default.
   - Round-trip accounting and a path null for families that exit before settlement,
     chosen in conformance first (candidates: [BACKTESTING](BACKTESTING.md)).
   - A recorded-stretch selection window in `calendar.py` and `run.py` for families
@@ -129,14 +124,17 @@ The windows, their dates, and per-hypothesis confirmation starts are defined in
 - **Forward confirmation.** A hypothesis whose studies leave it too little confirmation
   window (counted in decision days left before the lockbox, less the embargoes at its
   maximum holding period), or whose data exists only from recordings, is confirmed on a stretch of the forward window fixed at its registration and
-  starting after it (`calendar.FORWARD_TESTS`): H1; H5, whose study runs into 2026 and
+  starting after it (`calendar.FORWARD_TESTS`): H1, withdrawn before its test (below;
+  [STRATEGIES](STRATEGIES.md) H1); H5, whose study runs into 2026 and
   whose forward window is entirely on the post-2026-08-14 Weather Company settlement
   source; and H11, whose data (order books) exists only from the recorder's start, so
   it selects on a recorded stretch that ends before its registration. A forward family
   never opens the lockbox. It is decided alone at α/12 once its window has settled,
   while Holm runs over the other families' places at α·(12 − f)/12, so neither waits for
   the other (`gauntlet.decide`). Which families are forward (`calendar.FORWARD`) is
-  final before Holm runs.
+  final before Holm runs. A family withdrawn before its test (`calendar.WITHDRAWN`) is
+  never confirmed; a forward one keeps its α/12 unspent, so no other family's threshold
+  moves.
 
 ## You (the user)
 

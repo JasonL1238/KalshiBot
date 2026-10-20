@@ -11,7 +11,7 @@ They motivate the hypotheses; they don't settle them.
 
 | H | Family | Prior evidence |
 |---|--------|---------------------------|
-| H1 | Favorite–longshot bias | Contracts ≤10¢ lose >60% on average, and those above ~70¢ earn small positive returns after fees. This holds in every category but weakened in 2025 ([Bürgi, Deng & Whelan](https://www.karlwhelan.com/Papers/Kalshi.pdf); [VoxEU](https://cepr.org/voxeu/columns/economics-kalshi-prediction-market)) |
+| H1 | Favorite–longshot bias (withdrawn, below) | Contracts ≤10¢ lose >60% on average, and those above ~70¢ earn small positive returns after fees. This holds in every category but weakened in 2025 ([Bürgi, Deng & Whelan](https://www.karlwhelan.com/Papers/Kalshi.pdf); [VoxEU](https://cepr.org/voxeu/columns/economics-kalshi-prediction-market)) |
 | H2 | Single-name maker premium, held to settlement | Over 72M trades (volume-weighted), takers lose ~1.1% and makers gain ~1.1%. The gap is smallest in finance and largest in world events, and it flipped after professional market makers arrived in 2024 ([Becker](https://www.jbecker.dev/research/prediction-market-microstructure)). Makers earn ~1.9¢ a contract in single-name markets and ~0.8¢ in broad ones, all of it in markets that settle NO; price impact is mostly permanent at 5 minutes, and a trailing VPIN near 0.9 or above predicts maker losses ([Bartlett & O'Hara](https://law.stanford.edu/publications/adverse-selection-in-prediction-markets-evidence-from-kalshi/), data to 2026-03-11, fees ignored) |
 | H3 | Coherence / ladder arbitrage | Bucket mids can sum above $1 ([RESEARCH §2](RESEARCH.md)). Leg risk and fees decide whether this is exploitable |
 | H4 | Crypto/finance: taker lag against external prices | A short-dated crypto contract is a digital option on its settlement index ([RESEARCH §1](RESEARCH.md)). Polymarket added taker fees to its 15-minute crypto markets against latency arbitrage ([The Block](https://www.theblock.co/post/384461/polymarket-adds-taker-fees-to-15-minute-crypto-markets-to-fund-liquidity-rebates)) |
@@ -31,7 +31,7 @@ Each family's design is fixed here before its confirmation test, which then runs
 (`kalshibot research discover | candles | confirm FAMILY`; the method and the gates:
 [BACKTESTING.md](BACKTESTING.md)).
 
-### H1 favorite–longshot bias (registered 2026-10-08)
+### H1 favorite–longshot bias (registered 2026-10-08, withdrawn 2026-10-20)
 
 H1's own choices; everything else is the pipeline's
 ([BACKTESTING.md](BACKTESTING.md), [ROADMAP calendar](ROADMAP.md#research-calendar)).
@@ -48,8 +48,9 @@ H1's own choices; everything else is the pipeline's
   week or two after their close (sports about 14 days), so 15 days admits nearly all
   volume, near each market's close. Most Economics, Elections and Politics markets
   still fall outside it (their latest expiration is further out).
-- **Confirmed forward,** on [2026-10-15, 2027-02-15) (`calendar.FORWARD_TESTS`; the
-  rule: [ROADMAP](ROADMAP.md#research-calendar)).
+- **Confirmed forward,** on [2026-10-15, 2027-02-15) (registered in
+  `calendar.FORWARD_TESTS`, removed at withdrawal; the rule:
+  [ROADMAP](ROADMAP.md#research-calendar)).
   [Bartlett & O'Hara 2026](https://law.stanford.edu/publications/adverse-selection-in-prediction-markets-evidence-from-kalshi/)
   (Kalshi data to March 11, 2026) find traders over-bet YES in markets that mostly
   settle NO, part of H1's mechanism, so H1's confirmation would start 2026-03-12, with
@@ -89,10 +90,10 @@ print's own price, a ±2¢ band, any print size and no limit) makes any configur
 profitable; how far below the deciding print Tier 1 filled:
 [BACKTESTING](BACKTESTING.md#fill-models).
 
-Status (2026-10-15): H1's confirmation waits for `gauntlet.power`'s revision and for a
-revised method that passes the H1-shaped rows (a logged change to its registered method,
-with the user's sign-off), then for its coupling R check ([BACKTESTING](BACKTESTING.md),
-Conformance and step 6).
+User ruling (2026-10-20): H1 is withdrawn on its discovery losses (above). Its forward
+test isn't run, so it gets no verdict, and not running it can't make a false discovery.
+It stays forward with its α/12 unspent, and `calendar.WITHDRAWN` refuses its
+confirmation ([ROADMAP](ROADMAP.md#research-calendar)).
 
 ## Hypothesis notes
 

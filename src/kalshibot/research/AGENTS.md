@@ -5,7 +5,7 @@ Hypotheses and verdicts: [docs/STRATEGIES.md](../../../docs/STRATEGIES.md).
 
 | File | What |
 |------|------|
-| `calendar.py` | Research windows (discovery / confirmation / lockbox / forward), the families confirmed forward (`FORWARD`), and each hypothesis's confirmation window (`confirmation_window`) |
+| `calendar.py` | Research windows (discovery / confirmation / lockbox / forward), the families confirmed forward (`FORWARD`) and withdrawn (`WITHDRAWN`), and each hypothesis's confirmation window (`confirmation_window`) |
 | `ledger.py` | Append-only trial ledger (`ledger/<family>.jsonl`, committed: trials, the confirmation's start marker, and reports on it) plus trial returns; the single lockbox unlock |
 | `load.py` | `Loader`: the only way research reads market data (one trade tape, candles, post-hoc masking, lockbox refusal), fee terms (`fee_schedule()`), the data hash trials record (`fingerprint()`), when the tables were fetched (`fetched()`), and the memory-capped DuckDB connection it and the data tests use (`connect()`) |
 | `calibration.py` | Taker calibration by price paid (the favorite–longshot table; the M2 positive control) |

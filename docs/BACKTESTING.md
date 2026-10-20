@@ -88,9 +88,9 @@ except what M3 fixes per family before its own confirmation test (the last list 
    the confirmation of every family of resting bids held to settlement until a revised
    method passes the maker rows: the Maker null (below; Conformance, Makers). An
    H1-shaped row in which the gauntlet does not hold its size, or in bold in the third
-   table, holds H1's confirmation until a revised method passes those rows: a logged
-   change to H1's registered method, with the user's sign-off. H1's coupling R check
-   (the pre-registration paragraph) holds it too, until it passes.
+   table, holds the confirmation of every H1-shaped family (Conformance) until a revised
+   method passes those rows; such a family's coupling R check (the pre-registration
+   paragraph) holds it too, until it passes.
 
 The null covers contracts held to settlement (step 2 keeps only decisions whose
 positions must settle inside their window). A position still open at the window's end
@@ -153,21 +153,22 @@ maximum holding period (which sets both embargoes and which markets count); the 
 rule's candle leg (the worse of the next 1-minute candle's extreme and the next print,
 or the print alone); the window-end bids that mark open positions (until they're wired
 in, zero); where needed, the path null; and, for a touch maker, its queue models and
-their calibration. H1, before its confirmation test, checks its coupling (Conformance,
-Coupling R) against the H1-shaped rows: its largest R̄ among its configurations, each on
-its own discovery positions and computed by the runner ([ROADMAP](ROADMAP.md#milestones)
-M3), must be at most some passing row's R; if it is above every row's R, a row at its R̄
-runs first. That is conservative where R̄ ≥ R (Coupling R, below), and a row's R is a
-mean over the configurations its worlds selected. A family of resting bids held to
-settlement needs no such check: in the Maker null each fill's variance is at least its
-break-even one, so on a contract bid on one side the null's variance is at least the
-boundary's. Such a family bids on one side of each contract, which the Maker null's
-bound needs, and on standalone contracts only, unless a revised method passes a bucket
-or ladder maker row first (`Positions.from_frame` refuses maker fills on both sides of
-one contract, or on several contracts of one draw: an exclusive event's buckets or a
-strike ladder). It registers only after a held-out maker row harder than the 1–5¢ row
-with a shock ρ = 0.5 lasting days (φ = 0.8) passes (e.g. φ = 0.9, or a confirmation
-twice as busy; Conformance, Makers).
+their calibration. An H1-shaped family (Conformance) checks its coupling before its
+confirmation test (Conformance, Coupling R) against the H1-shaped rows: its largest R̄
+among its configurations, each on its own discovery positions and computed by the runner
+([ROADMAP](ROADMAP.md#milestones) M3), must be at most some passing row's R; if it is
+above every row's R, a row at its R̄ runs first. That is conservative where R̄ ≥ R
+(Coupling R, below), and a row's R is a mean over the configurations its worlds
+selected. A family of resting bids held to settlement needs no such check: in the Maker
+null each fill's variance is at least its break-even one, so on a contract bid on one
+side the null's variance is at least the boundary's. Such a family bids on one side of
+each contract, which the Maker null's bound needs, and on standalone contracts only,
+unless a revised method passes a bucket or ladder maker row first
+(`Positions.from_frame` refuses maker fills on both sides of one contract, or on several
+contracts of one draw: an exclusive event's buckets or a strike ladder). It registers
+only after a held-out maker row harder than the 1–5¢ row with a shock ρ = 0.5 lasting
+days (φ = 0.8) passes (e.g. φ = 0.9, or a confirmation twice as busy; Conformance,
+Makers).
 
 ## Fill models
 
@@ -286,23 +287,29 @@ is about ten), and the dependence sample is the runner's (above). The worlds:
   (Coupling R, below); the Maker null takes that covariance's form (above). The maker
   edge rows (the third table) make the same fills a few cents cheaper. The grid's last
   three rows are held-out maker worlds (Conformance, Makers);
-- **H1-shaped:** the taker family deciding again at each of 15 snapshots of a contract's
-  day, as H1 decides once a day for up to 15 days, so it buys a contract again whenever
-  its ask is still past the cutoff. Each truth is a posterior on noisy signals of the
-  event's draw (`synthetic.py`, "Snapshots"), for buckets, binaries and strike ladders
-  alike, quoted at the boundary every time. The null prices each position at its
-  snapshot's mid, so on one draw it nests a binary's or a strike's positions and slides
-  a bucket's interval as its event's de-vigged prices move, while in truth they share
-  one outcome; Coupling R, below, measures the difference. One row takes H1's NO cutoffs
-  (half spread 1¢); the others the 20¢ cutoff alone, at the half spreads their labels
-  show: with all five, discovery most often selects 3¢ (about half the worlds), whose
-  nearly settled positions vary so little next to the null (its mids carry the half
-  spread) that their coupling barely registers. Two rows of the third table lower every
-  ask, by 0.75¢ and, with a lasting shock, by 1¢. Limits: NO longshots only, not H1's
-  YES favorites configurations; a contract's 15 decisions compressed into one synthetic
-  day; and every cutoff decides at the same snapshots, so the pooled dependence sample
-  keeps one position per contract and snapshot, where H1's configurations decide at
-  their own first prints.
+- **H1-shaped:** worlds for an H1-shaped family, a taker family whose positions, in one
+  configuration or pooled across them, fall on one draw at more than one decision time
+  (a contract bought again, or several of one event's buckets or one ladder's strikes
+  bought at different times), as H1 was ([STRATEGIES](STRATEGIES.md) H1). In them the
+  family decides again at each of 15 snapshots of a contract's day, as H1 would have
+  once a day for up to 15 days, so it buys a contract again whenever its ask is still
+  past the cutoff. Each truth is a posterior on noisy signals of the event's draw
+  (`synthetic.py`, "Snapshots"), for buckets, binaries and strike ladders alike, quoted
+  at the boundary every time. The null prices each position at its snapshot's mid, so on
+  one draw it nests a binary's or a strike's positions and slides a bucket's interval as
+  its event's de-vigged prices move, while in truth they share one outcome; Coupling R,
+  below, measures the difference. One row takes H1's NO cutoffs (half spread 1¢); the
+  others the 20¢ cutoff alone, at the half spreads their labels show: with all five,
+  discovery most often selects 3¢ (about half the worlds), whose nearly settled
+  positions vary so little next to the null (its mids carry the half spread) that their
+  coupling barely registers. Two rows of the third table lower every ask, by 0.75¢ and,
+  with a lasting shock, by 1¢. Limits: a contract's 15 decisions compressed into one
+  synthetic day; and every cutoff decides at the same snapshots, so the pooled
+  dependence sample keeps one position per contract and snapshot, where H1's
+  configurations decide at their own first prints. So the rows test NO bought at YES ≤
+  20¢ with at most 15 decision times a contract, pooled across configurations; an
+  H1-shaped family of any other shape (YES-side, NO above 20¢, mixed, or more decision
+  times a contract) needs a row of its own shape first.
 
 Coupling R, for one configuration's positions: the sum over the null's clusters of the
 variance at the boundary (each position winning with its break-even, given the earlier
@@ -441,8 +448,9 @@ pass rule):
   re-set by an appended row only if a measurement falls outside by more than its Monte
   Carlo error, and measured 54.7–73.3% here.
 
-So, by step 6, `gauntlet.power` is revised before any confirmation runs, and H1 waits
-for a revised method that passes every H1-shaped row, in the size table and the third.
+So, by step 6, `gauntlet.power` is revised before any confirmation runs, and an
+H1-shaped family waits for a revised method that passes every H1-shaped row, in the size
+table and the third.
 The families of resting bids waited for the Maker null, which passes every maker row
 (Makers, below).
 
@@ -464,8 +472,9 @@ R and R̄ by row (Coupling R, above):
 | H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, ladders all strike ladders | 0.63 | 0.81 |
 
 Among the H1-shaped rows where the gauntlet holds its size, the largest R is 1.16 ("NO
-at YES ≤ 20¢ only, half spread 0.5¢"): the bound on H1's R̄ (the pre-registration
-paragraph) under the method measured here, re-set when a revised one is measured.
+at YES ≤ 20¢ only, half spread 0.5¢"): the bound on an H1-shaped family's R̄ (the
+pre-registration paragraph) under the method measured here, re-set when a revised one
+is measured.
 
 Reproduce at 4baee4e with `OMP_NUM_THREADS=1 python -m
 kalshibot.research.validation.conformance` (the first two tables and R), adding `power`

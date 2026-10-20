@@ -30,7 +30,7 @@ class MarketData(Protocol):
 
 
 class Strategy(Protocol):
-    family: str  # the hypothesis it tests, e.g. "H1"
+    family: str  # the hypothesis it tests, e.g. "H8"
     # Longest any position stays open. Research keeps a decision only if its market's
     # as-listed latest expiration is at most this long after it; Kalshi lists that about a
     # week after the scheduled close, so this is usually the hold plus a week.
