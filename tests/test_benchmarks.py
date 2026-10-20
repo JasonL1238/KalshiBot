@@ -15,8 +15,10 @@ from pathlib import Path
 
 import pytest
 
-# private, but the only handle on the stderr fd pytest keeps out of capture for faulthandler
-from _pytest.faulthandler import fault_handler_stderr_fd_key
+try:  # private, but the only handle on the stderr fd pytest keeps out of capture
+    from _pytest.faulthandler import fault_handler_stderr_fd_key
+except ImportError:  # a pytest without it: the watchdog falls back to sys.__stderr__
+    fault_handler_stderr_fd_key = None
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from packaging.requirements import Requirement
 from websockets.asyncio.client import connect
@@ -40,7 +42,7 @@ def bench(name: str):
     try:
         return importlib.import_module(name)
     except ModuleNotFoundError as e:
-        if e.name.split(".")[0] not in BENCH:
+        if (e.name or "").split(".")[0] not in BENCH:
             raise
         pytest.skip(f"{name} needs {e.name} (the [bench] extra)")
 
@@ -100,11 +102,30 @@ def test_replay_charges_a_stall_to_every_frame_queued_behind_it():
     assert all(lat[k] >= (30 - k) * 1_000_000 for k in range(10, 30)), list(lat)
 
 
+def test_recorder_charges_each_item_from_its_own_scheduled_time(monkeypatch):
+    """Exact charges on a scripted clock: frames from t0 + their own offsets, in order;
+    `hit` for items finishing out of order."""
+    times = iter([999, 1_100, 1_250, 1_260, 1_400])  # the first reading is t0's frame
+    monkeypatch.setattr(harness, "clock", lambda: next(times))
+    rec = harness.Recorder([0, 100, 100, 300])
+    rec.frame(b"1000")  # t0 = 1000
+    for _ in range(4):
+        rec.frame(b"x")
+    assert list(rec.lat) == [100, 150, 160, 100] and rec.done
+    times = iter([1_400, 1_500])
+    hits = harness.Recorder([0, 100, 300])
+    hits.start(1_000)
+    hits.hit(2)
+    hits.hit(0)
+    assert list(hits.lat) == [500, 0, 100] and not hits.done
+
+
 def test_p1_charges_each_frame_its_processing_and_its_queue():
-    """Every frame due at once, each decode taking at least 1 ms: frame i is done no
-    earlier than (i + 1) ms after it was due, and never before its own stages are."""
+    """Every frame due at once, each decode taking at least 1 ms: frame i is done, and an
+    order it decides is signed, no earlier than (i + 1) ms after it was due, and never
+    before its own stages are."""
     hot_path = bench("hot_path")
-    frames = harness.Stream(100, markets=10).frames
+    frames = harness.Stream(300, markets=10).frames
 
     def slow_decode(frame: bytes):
         end = time.perf_counter_ns() + 1_000_000
@@ -117,20 +138,25 @@ def test_p1_charges_each_frame_its_processing_and_its_queue():
             pass
 
         signer = KalshiSigner("test", ed25519.Ed25519PrivateKey.generate())
-        sink, timings = harness.Recorder([0] * len(frames)), hot_path.Timings.for_frames(
-            len(frames))
-        stack = hot_path.Stack(slow_decode, hot_path.decode.StructFeed(),
-                               hot_path.Rule(signer, hot_path.msgspec.json.encode), timings,
+        sink = harness.Recorder([0] * len(frames))
+        timings = hot_path.Timings.for_frames(len(frames), parse=True)
+        rule = hot_path.Rule(signer, hot_path.msgspec.json.encode)
+        stack = hot_path.Stack(slow_decode, hot_path.decode.StructFeed(), rule, timings,
                                sink, post)
         stack.on_frame(str(harness.clock()).encode())  # t0: every frame is due now
         for frame in frames:
             stack.on_frame(frame)
         await stack.drain()
-        return sink, timings
+        return sink, timings, rule
 
-    sink, t = asyncio.run(consume())
+    sink, t, rule = asyncio.run(consume())
     for i in range(len(frames)):
         assert sink.lat[i] >= max((i + 1) * 1_000_000, t.decode[i] + t.book[i]), i
+        assert t.parse[i] <= t.book[i], i
+    assert rule.decisions, "the rule never fired on this stream"
+    for (i, _, _), to_order, decide_sign in zip(rule.decisions, t.to_order, t.decide_sign,
+                                                 strict=True):
+        assert to_order >= max((i + 1) * 1_000_000, t.decode[i] + t.book[i] + decide_sign), i
 
 
 def test_stream_frames_rebuild_the_generators_books():
@@ -167,7 +193,7 @@ def test_decoders_agree_and_typed_feed_matches_book_feed():
 SMALL = {  # script -> main() arguments for a run of a few seconds
     "decode": {"n": 2_000, "speed": 20},
     "sign": {"n": 400, "speed": 10},
-    "ws_clients": {"n": 1_200, "speed": 10},
+    "ws_clients": {"n": 200, "speed": 10, "rounds": 1},
     "http_clients": {"n": 300, "speed": 1},
     "gc_pauses": {"n": 800, "speed": 10, "heaps": (0, 10_000)},
     "hot_path": {"n": 4_000, "speed": 5, "reconnect_markets": 100},
@@ -178,13 +204,15 @@ SMALL = {  # script -> main() arguments for a run of a few seconds
 def test_script_runs_end_to_end(script, capsys, monkeypatch, request):
     module = bench(script)
     monkeypatch.setattr(harness, "VERIFY", True)  # replays check each frame's payload
-    # a hung replay fails with its stacks, on the stderr pytest keeps for faulthandler
+    # A hung replay fails with its stacks, on the stderr pytest keeps for faulthandler.
+    # Under -p no:faulthandler they go to pytest's capture instead: add -s to see them.
     faulthandler.dump_traceback_later(300, exit=True, file=request.config.stash.get(
-        fault_handler_stderr_fd_key, sys.__stderr__.fileno()))  # -p no:faulthandler
+        fault_handler_stderr_fd_key, sys.__stderr__.fileno()))
     try:
         module.main(**SMALL[script])
     finally:
         faulthandler.cancel_dump_traceback_later()
     out = capsys.readouterr().out
-    assert out.startswith(f"{script}") and "platform: " in out and "python: " in out
+    assert out.startswith(f"{script}") and "commit: " in out and "platform: " in out
+    assert "python: " in out
     assert "mean µs" in out and "p99.9" in out

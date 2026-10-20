@@ -24,6 +24,7 @@ from kalshibot.kalshi.models import OrderBook, price_units, size_units
 WS_URL = "wss://external-api-ws.kalshi.com/trade-api/ws/v2"
 WS_PATH = "/trade-api/ws/v2"
 SUBSCRIBE_CHUNK = 500  # tickers per subscribe command
+CONNECT_OPTIONS = {"max_size": None, "compression": None}  # no frame cap, no deflate
 
 
 class SequenceGap(RuntimeError):
@@ -86,5 +87,5 @@ class Connection:
 @asynccontextmanager
 async def connect_feed(signer: KalshiSigner, url: str = WS_URL) -> AsyncIterator[Connection]:
     async with connect(url, additional_headers=signer.headers("GET", WS_PATH),
-                       max_size=None, compression=None) as ws:
+                       **CONNECT_OPTIONS) as ws:
         yield Connection(ws)

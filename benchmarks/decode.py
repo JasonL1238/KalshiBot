@@ -1,6 +1,7 @@
 """Which JSON decoder should the hot path use for Kalshi's WebSocket frames?
 
-Run: python benchmarks/decode.py   (needs the [bench] extra)
+Run: python benchmarks/decode.py   (msgspec comes with the core dependencies; orjson is
+optional, from the [bench] extra)
 
 Candidates decode a frame and pull out the fields the next stage needs (book updates,
 trade prints, our fills), so typed structs pay for nothing a dict reader skips:
@@ -91,13 +92,30 @@ typed_decoder = msgspec.json.Decoder(Message)
 
 
 class StructFeed:
-    """`kalshi.ws.BookFeed` for typed messages: the same books, sequence checks, errors."""
+    """`kalshi.ws.BookFeed` for typed messages: the same books, sequence checks, errors.
+    `on_message` is `apply(parse(m))`, two steps so that P1 can time them apart."""
 
     def __init__(self) -> None:
         self.books: dict[str, OrderBook] = {}
         self._next_seq: dict[int, int] = {}
 
     def on_message(self, m: Message) -> str | None:
+        return self.apply(self.parse(m))
+
+    @staticmethod
+    def parse(m: Message) -> tuple:
+        """The message with its dollar and size strings as fixed-point units."""
+        b = m.msg
+        if type(m) is DeltaMsg:
+            return m, price_units(b.price_dollars), size_units(b.delta_fp)
+        if type(m) is SnapshotMsg:
+            return (m, [(price_units(p), size_units(s)) for p, s in b.yes_dollars_fp],
+                    [(price_units(p), size_units(s)) for p, s in b.no_dollars_fp])
+        return m, None, None
+
+    def apply(self, parsed: tuple) -> str | None:
+        """Check the sequence and update the books; the ticker changed, if any."""
+        m, a, b = parsed
         kind = type(m)
         if kind is not DeltaMsg and kind is not SnapshotMsg:
             return None
@@ -105,18 +123,15 @@ class StructFeed:
         if expected is not None and m.seq != expected:
             raise SequenceGap(m.sid, expected, m.seq)
         self._next_seq[m.sid] = m.seq + 1
-        b = m.msg
+        ticker = m.msg.market_ticker
         if kind is SnapshotMsg:
-            self.books[b.market_ticker] = OrderBook(
-                b.market_ticker, [(price_units(p), size_units(s)) for p, s in b.yes_dollars_fp],
-                [(price_units(p), size_units(s)) for p, s in b.no_dollars_fp])
+            self.books[ticker] = OrderBook(ticker, a, b)
         else:
-            book = self.books.get(b.market_ticker)
+            book = self.books.get(ticker)
             if book is None:
                 raise SequenceGap(m.sid, m.seq, m.seq)
-            side = book.yes if b.side == "yes" else book.no
-            side.apply(price_units(b.price_dollars), size_units(b.delta_fp))
-        return b.market_ticker
+            (book.yes if m.msg.side == "yes" else book.no).apply(a, b)
+        return ticker
 
 
 def read_dict(m: dict) -> tuple:

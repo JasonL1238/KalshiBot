@@ -49,16 +49,19 @@ PACKAGES = ("uvloop", "picows", "msgspec", "aiohttp", "websockets", "httpx", "cr
 
 @dataclass
 class Timings:
-    """One replay's measurements, ns: per frame, and per order."""
+    """One replay's measurements, ns: per frame, and per order. `book` is the feed's whole
+    stage; `parse`, its share spent turning dollar and size strings into units, exists
+    only for a feed that does that as a step of its own (`decode.StructFeed`)."""
     decode: array
     book: array
+    parse: array | None = None
     decide_sign: array = field(default_factory=lambda: array("q"))
     to_order: array = field(default_factory=lambda: array("q"))
     to_ack: array = field(default_factory=lambda: array("q"))
 
     @classmethod
-    def for_frames(cls, n: int) -> Timings:
-        return cls(array("q", bytes(8 * n)), array("q", bytes(8 * n)))
+    def for_frames(cls, n: int, parse: bool) -> Timings:
+        return cls(*(array("q", bytes(8 * n)) for _ in range(3 if parse else 2)))
 
 
 class Rule:
@@ -99,6 +102,7 @@ class Stack:
                  sink: harness.Recorder, post):
         self.decoder, self.feed, self.rule, self.timings = decoder, feed, rule, timings
         self.sink, self.post, self.tasks = sink, post, set()
+        self.split = timings.parse is not None  # the feed parses, then applies
 
     def on_frame(self, payload) -> None:
         sink, clock, t = self.sink, harness.clock, self.timings
@@ -110,7 +114,12 @@ class Stack:
         t0 = clock()
         msg = self.decoder(payload)
         t1 = clock()
-        ticker = self.feed.on_message(msg)
+        if self.split:
+            parsed = self.feed.parse(msg)
+            t.parse[i] = clock() - t1
+            ticker = self.feed.apply(parsed)
+        else:
+            ticker = self.feed.on_message(msg)
         t2 = clock()
         t.decode[i], t.book[i] = t1 - t0, t2 - t1
         if ticker is not None and (order := self.rule.decide(self.feed.books[ticker], i)):
@@ -203,7 +212,7 @@ def scenarios(reconnect_markets: int) -> dict[str, Scenario]:
             "reconnect": Scenario(steady, reconnect_markets, resnapshot=True)}
 
 
-def bursts(offsets: list[int]) -> list[tuple[int, int]]:
+def find_bursts(offsets: list[int]) -> list[tuple[int, int]]:
     """(index of its last item, size) for each burst: items sharing one scheduled time.
     A burst has drained once its last item is done."""
     out, start = [], 0
@@ -234,7 +243,8 @@ def run(n: int, scenario: Scenario, rounds: int
             loop, consume, encode = STACKS[name]
 
             def go(url: str, sink: harness.Recorder) -> None:
-                rule, timings = Rule(signer, encode), Timings.for_frames(len(offsets))
+                rule = Rule(signer, encode)
+                timings = Timings.for_frames(len(offsets), parse=consume is p1)
                 if not sink.warmup:
                     runs[name].append((rule, timings))
                 harness.run_on(loop, lambda: consume(url, sink, rule, timings, server))
@@ -245,7 +255,7 @@ def run(n: int, scenario: Scenario, rounds: int
     sizes = {scenario.pattern.burst_size, m if scenario.resnapshot else 0}
     return ({name: StackRuns(r, result.lat[name], result.cpu[name])
              for name, r in runs.items()}, result.lag,
-            [(i, size) for i, size in bursts(offsets) if size in sizes])
+            [(i, size) for i, size in find_bursts(offsets) if size in sizes])
 
 
 def check_agreement(results: dict[str, StackRuns]) -> int:
@@ -267,7 +277,7 @@ def main(n: int = 40_000, speed: float = 1.0, rounds: int | None = None,
     for label, scenario in scenarios(reconnect_markets).items():
         scenario = scenario.faster(speed)
         with harness.Steal() as steal:
-            results, lag, burst_ends = run(n, scenario, rounds)
+            results, lag, bursts = run(n, scenario, rounds)
         decisions = check_agreement(results)
         resnapshot = ", every market's snapshot again mid-replay" if scenario.resnapshot else ""
         print(f"open-loop replay, {label} ({scenario.pattern}{resnapshot}), {rounds} × "
@@ -279,14 +289,16 @@ def main(n: int = 40_000, speed: float = 1.0, rounds: int | None = None,
         for name, r in results.items():
             print(name)
             print(harness.row("  frame → processed", r.frames) + f"{r.cpu:>14.1f}")
-            for size in sorted({size for _, size in burst_ends}):
+            for size in sorted({size for _, size in bursts}):
                 print(harness.row(f"  burst of {size} → its last frame done",
                                   [r.frames[k * per + i] for k in range(rounds)
-                                   for i, s in burst_ends if s == size]))
+                                   for i, s in bursts if s == size]))
             print(harness.row("  frame → signed order", r.pooled("to_order")))
             print(harness.row("  frame → ack (loopback TLS)", r.pooled("to_ack")))
             print(harness.row("  stage: decode", r.pooled("decode")))
-            print(harness.row("  stage: book", r.pooled("book")))
+            print(harness.row("  stage: book (parse + apply)", r.pooled("book")))
+            if r.runs[0][1].parse is not None:
+                print(harness.row("    of which parse", r.pooled("parse")))
             print(harness.row("  stage: decide + sign", r.pooled("decide_sign")))
         print()
 

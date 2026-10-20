@@ -61,6 +61,18 @@ def _cpu_model() -> str:
     return platform.processor() or platform.machine()
 
 
+def _commit() -> str:
+    """The repo's HEAD, "-dirty" if tracked files differ from it (new outputs don't)."""
+    def git(*args: str) -> str:
+        return subprocess.run(["git", *args], cwd=Path(__file__).resolve().parents[1],
+                              capture_output=True, text=True, check=True).stdout.strip()
+    try:
+        return git("rev-parse", "--short", "HEAD") + (
+            "-dirty" if git("status", "--porcelain", "--untracked-files=no") else "")
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
 def _version(package: str) -> str:
     try:
         return importlib.metadata.version(package)
@@ -96,6 +108,7 @@ CPUS = (dict(zip(("sender", "client", "server"), _CORES[:3], strict=True))
 def header(title: str, packages: Sequence[str] = ()) -> None:
     gil = getattr(sys, "_is_gil_enabled", lambda: True)()
     print(title)
+    print(f"commit: {_commit()}")
     print(f"platform: {platform.platform()}, {_cpu_model()}, {os.cpu_count()} CPUs")
     print(f"python: {platform.python_implementation()} {platform.python_version()}"
           f"{'' if gil else ' (free-threaded, GIL off)'}")

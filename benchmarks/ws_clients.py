@@ -31,10 +31,11 @@ import harness
 from picows import WSCloseCode, WSListener, WSMsgType, ws_connect
 from websockets.asyncio.client import connect
 
-# The incumbent's settings (kalshi/ws.py `connect_feed`), plus no keepalive pings (the
-# replay server doesn't answer them) and no proxy from the environment.
-WEBSOCKETS_OPTIONS = {"max_size": None, "compression": None, "ping_interval": None,
-                      "proxy": None}
+from kalshibot.kalshi.ws import CONNECT_OPTIONS
+
+# The incumbent's settings, plus no keepalive pings (the replay server doesn't answer
+# them) and no proxy from the environment.
+WEBSOCKETS_OPTIONS = {**CONNECT_OPTIONS, "ping_interval": None, "proxy": None}
 
 
 async def via_websockets(url: str, sink: harness.Recorder) -> None:

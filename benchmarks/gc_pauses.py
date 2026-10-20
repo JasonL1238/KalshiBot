@@ -59,8 +59,9 @@ def paths() -> dict[str, tuple]:
 
 
 def long_lived_heap(n: int) -> list[dict]:
-    """`n` dicts holding a list and a dict each: 2n GC-tracked containers (CPython never
-    tracks the inner dict, which holds only atomic values)."""
+    """`n` dicts holding a list and a dict each: 2n GC-tracked containers on CPython 3.13,
+    which doesn't track the inner dict (it holds only atomic values); 3n on 3.14 and
+    3.14t, which do."""
     return [{"ticker": f"KXSYN{i:07d}", "fields": [i, str(i)], "meta": {"i": i}}
             for i in range(n)]
 
