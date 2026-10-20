@@ -17,3 +17,6 @@ h1-C-power-5-0.25 rc=0 wall=929s args=power 0.25 --only 'makers:' --repeated h1-
 h1-C-power-6-0.25 rc=0 wall=1084s args=power 0.25 --only 'H1-shaped:' --repeated h1-C
 CSCREENDONE
 h1-C-shock-row-1.0 rc=0 wall=6387s args=1.0 --only 'H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, shock' --repeated h1-C
+unchanged-taker-0.1 rc=0 wall=739s args=0.1 --only boundary
+unchanged-yes-0.1 rc=0 wall=235s args=0.1 --only 'YES family'
+unchanged-edge1-0.1 rc=0 wall=148s args=0.1 --only '1¢ lower NO asks on q < 0.15'
