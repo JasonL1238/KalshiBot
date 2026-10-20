@@ -16,3 +16,4 @@ h1-C-power-4-0.25 rc=0 wall=123s args=power 0.25 --only 'mixed' --repeated h1-C
 h1-C-power-5-0.25 rc=0 wall=929s args=power 0.25 --only 'makers:' --repeated h1-C
 h1-C-power-6-0.25 rc=0 wall=1084s args=power 0.25 --only 'H1-shaped:' --repeated h1-C
 CSCREENDONE
+h1-C-shock-row-1.0 rc=0 wall=6387s args=1.0 --only 'H1-shaped: NO at YES ≤ 20¢ only, half spread 0.5¢, shock' --repeated h1-C
