@@ -114,3 +114,19 @@ against 5.97%) and at Holm's level on the no-shock row at 0.25 (0.8% against a f
 limit of 0.705%). The cost is H1 power: measured 26.7 against h1-C's 52.0 (0.75¢ row) and
 54.7 against 70.7 (lasting shock), at 0.25. Which trade H1's registered method takes is
 the user's call; h1-C's code is at ab2d5c6.
+
+## Full-scale results of h1-D (frozen at 775bdd4)
+
+- The six H1-shaped rows hold (`final-h1-1.0.md`); the shock row's gauntlet is 3.2 / 0.1
+  against 6.0 / 0.7 at 4baee4e (limits 5.97 / 0.705).
+- The third table has no bold cell (`final-power-1.0.md`): the H1 shock row is 60.6 / 55.0
+  (85.2 / 73.3 at 4baee4e); the two near-zero taker cells carry ‡, bold only under the
+  sample-SE rule alone.
+- Held out (`final-h1-held-out-1.0.md`): three of four hold; the strike ladders with a
+  lasting shock reach 6.0% at α = 0.05 against 5.97% (and the widened null 6.1% on the
+  binaries row with ρ = 0.3, φ = 0.5, though its gauntlet holds at 5.9%). D changes
+  little there (binaries R ≈ 0.95; strike ladders 0.63 → 0.64), and dependence makes up
+  most of the widening (4.26), so the makers' Bartlett bias is the likely cause:
+  untested, and not fitted to these held-out rows.
+- One-decision takers at 0.1 and every maker row at full scale are byte-identical to the
+  maker revision's (`unchanged-check.txt`).
