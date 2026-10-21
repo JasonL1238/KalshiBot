@@ -504,7 +504,7 @@ def test_memory_holds_one_parts_intents(market, monkeypatch):
 
         def intents(self, data, start, end, config):
             t = pd.date_range(start, end, freq="30s", inclusive="left")
-            t = t[t - t.floor("D") < pd.Timedelta(hours=20)]
+            t = t[t - t.floor("D") < timedelta(hours=20)]
             return pd.DataFrame({"intent_id": range(len(t)), "ticker": "KXT-" + t.strftime("%F"),
                                  "side": "no", "decision_time": t, "count": 100, "limit": 9500.0},
                                 columns=INTENT_COLUMNS)

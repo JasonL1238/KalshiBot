@@ -197,9 +197,9 @@ def test_bids_only_while_the_event_shows_two_markets(tape):
         assert bids(intents, market).index[-1] == T("2025-10-03 01:59:50")
 
 
-@pytest.mark.parametrize(("series", "cap"), [("KXMLBGAME", "5h"), ("KXNHLGAME", "3.5h"),
-                                             ("KXNCAAMBGAME", "3h"), ("KXWNBAGAME", "3h")])
-def test_each_league_is_live_until_its_cap(series, cap):
+@pytest.mark.parametrize(("series", "hours"), [("KXMLBGAME", 5), ("KXNHLGAME", 3.5),
+                                               ("KXNCAAMBGAME", 3), ("KXWNBAGAME", 3)])
+def test_each_league_is_live_until_its_cap(series, hours):
     event, begins = f"{series}-25OCT02AAABBB", T("2025-10-02 23:00")
     markets = pd.DataFrame({"ticker": [f"{event}-AAA", f"{event}-BBB"], "event_ticker": event,
                             "series_ticker": series, "created_time": begins - timedelta(1),
@@ -207,7 +207,7 @@ def test_each_league_is_live_until_its_cap(series, cap):
                             "mutually_exclusive": True})
     live, _ = deep_bids._live(markets, START, END, CONFIG["horizon"])
     assert (live["first_tick"] == begins).all()
-    assert (live["stop"] == begins + pd.Timedelta(cap)).all()
+    assert (live["stop"] == begins + timedelta(hours=hours)).all()
 
 
 def test_markets_count_in_creation_order_and_one_created_on_a_tick_is_seen_after_it():
