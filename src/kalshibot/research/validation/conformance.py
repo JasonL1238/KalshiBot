@@ -11,8 +11,8 @@ market. A maker family (`depths`, in a sweep world: `synthetic.py`, Resting bids
 a configuration per depth instead: a bid per contract that far below its side's truth,
 re-pegged to the cent grid before every sweep, buying one contract on each sweep through
 it (Tier 1's rule), priced by the null at the mid before that sweep. In a snapshot world
-(`synthetic.py`, Snapshots) the taker family decides afresh at every snapshot, as H1
-does daily, so it buys a contract again whenever its ask is still past the cutoff, each
+(`synthetic.py`, Snapshots) the taker family decides afresh at every snapshot, as H1's
+strategy did, so it buys a contract again whenever its ask is still past the cutoff, each
 position priced at its snapshot. `_coupling` measures how far the null's intervals
 understate the variance of a cluster's positions, repeated or on several contracts.
 `one_world` returns every statistic the candidate decision procedures use, and
@@ -55,7 +55,6 @@ from kalshibot.kalshi.fees import CENT
 from kalshibot.kalshi.models import PRICE_SCALE, SIZE_SCALE
 from kalshibot.research.backtest.settle import daily_returns
 from kalshibot.research.validation import gauntlet, null, stats, synthetic
-from kalshibot.strategies.favorite_longshot import FavoriteLongshot
 
 THRESHOLDS = [600, 700, 800, 1000, 1200, 1500, 2000]  # YES ask cutoffs, price units
 FAVORITES = 8000  # the mixed family also buys YES at asks of at least this
@@ -133,8 +132,8 @@ def _coupling(pos: pd.DataFrame, quotes: pd.DataFrame) -> tuple[float, float]:
     `quotes` (`null.inputs`' output, with each contract's truth q) gives every contract's
     interval at every time a position in its cluster is priced: the truths' for R
     (`_true_intervals`), the null's for R̄, which counts two buckets' terms as 0. Its R̄
-    half moves to null.py before H1's confirmation test (ROADMAP M3); R, from the world's
-    truths, stays here."""
+    half moves to null.py before an H1-shaped family's confirmation test (ROADMAP M3); R,
+    from the world's truths, stays here."""
     pos = pos.sort_values("priced_at", kind="stable")
     count = pos["fill_count"].to_numpy(float)
     b = pos["paid"].to_numpy() / (count * PRICE_SCALE)
@@ -306,8 +305,7 @@ MAKERS = {"bucket_share": 0.0, "depths": (500, 1000, 1500, 2500), "sweeps": 16} 
 MAKERS_STRESS = {"bucket_share": 0.0, "depths": (100, 200, 300, 500), "sweeps": 64,
                  "news": 0.1}  # shallow, as H2's may rest
 H1_SHAPED = {"snapshots": 15, "signal": 0.5,  # a decision a day for H1's 15-day hold
-             "thresholds": tuple(sorted(c["yes_price"] for c in FavoriteLongshot().configs()
-                                        .values() if c["buy"] == "no"))}  # its NO cutoffs
+             "thresholds": (300, 500, 1000, 1500, 2000)}  # its NO cutoffs (YES asks)
 H1_COUPLED = {**H1_SHAPED, "thresholds": (2000,), "half_spread_cents": 0.5}  # R at its most
 GRID = [  # (label, worlds, one_world settings); no edge unless the label says so
     ("market prices: buying NO loses spread + fee", 400, {"quotes": "market"}),

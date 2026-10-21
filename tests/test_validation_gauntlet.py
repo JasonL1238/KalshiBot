@@ -15,6 +15,7 @@ def test_holm_runs_over_every_place(monkeypatch):
     # at m = 12 the smallest p needs ≤ 0.05/12 ≈ 0.0042 and the next ≤ 0.05/11 ≈ 0.0045;
     # at m = 2, ≤ 0.025 and ≤ 0.05
     monkeypatch.setattr(calendar, "FORWARD", frozenset())
+    monkeypatch.setattr(calendar, "WITHDRAWN", frozenset())  # H1 as any family's name
     gates = gauntlet.Gates(families=12)
     assert gauntlet.decide({"H1": 0.004, "H2": 0.006}, gates) == {"H1": True, "H2": False}
     assert gauntlet.decide({"H1": 0.004, "H2": 0.006}, gauntlet.Gates(families=2)) == {
@@ -26,6 +27,7 @@ def test_holm_runs_over_every_place(monkeypatch):
 def test_a_forward_family_spends_only_its_own_share_of_alpha(monkeypatch):
     # H1 confirmed forward: alone at 0.05/12; Holm over the other 11 places at 0.05 · 11/12
     monkeypatch.setattr(calendar, "FORWARD", frozenset({"H1"}))
+    monkeypatch.setattr(calendar, "WITHDRAWN", frozenset())  # H1 standing in for a forward one
     out = gauntlet.decide({"H1": 0.004, "H2": 0.004, "H3": 0.0045})
     assert out == {"H1": True, "H2": True, "H3": True}  # H3: 10 × 0.0045 ≤ 0.05 · 11/12
     assert gauntlet.decide({"H1": 0.0042, "H2": 0.004}) == {
@@ -34,6 +36,13 @@ def test_a_forward_family_spends_only_its_own_share_of_alpha(monkeypatch):
     monkeypatch.undo()  # the registered forward set: H1, H5 and H11 leave 9 places
     with pytest.raises(ValueError, match="places"):
         gauntlet.decide({f"H{i}": 0.5 for i in (2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13)})
+
+
+def test_a_withdrawn_family_has_no_p_value_to_decide():
+    assert "H1" in calendar.WITHDRAWN
+    with pytest.raises(ValueError, match="withdrawn"):
+        gauntlet.decide({"H1": 0.001, "H2": 0.004})
+    assert gauntlet.decide({"H2": 0.004}) == {"H2": True}
 
 
 def test_a_family_passes_only_if_both_tests_reject():

@@ -290,7 +290,9 @@ def decide(p_values: Mapping[str, float], gates: Gates = PREREGISTERED) -> dict[
     (`calendar.FORWARD`, f of them) is decided alone at α/m once its window has settled;
     the others by Holm over the remaining m − f places at α(m − f)/m, a place with no
     family run counting as p = 1. The union bound adds the two, so neither waits for the
-    other."""
+    other. A withdrawn family (`calendar.WITHDRAWN`) has no test, so its p-value is refused."""
+    if withdrawn := calendar.WITHDRAWN & p_values.keys():
+        raise ValueError(f"withdrawn families have no confirmation test: {sorted(withdrawn)}")
     m, forward = gates.families, calendar.FORWARD
     rest = [n for n in p_values if n not in forward]
     places = m - len(forward)
