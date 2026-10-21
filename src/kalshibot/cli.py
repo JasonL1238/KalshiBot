@@ -54,8 +54,8 @@ app.add_typer(backfill_app, name="backfill")
 
 @backfill_app.command("reference")
 def backfill_reference():
-    """Series, fee changes, events, every non-combo market (live + historical), and the
-    incentive programs."""
+    """Series, fee changes, events, every market but KXMVE combos (live + historical), and
+    the incentive programs."""
     out = bf.kalshi_dir(data_dir())
     with bf.public_clients(1)() as client:
         for step in (bf.backfill_series, bf.backfill_fee_changes, bf.backfill_markets,
@@ -69,7 +69,7 @@ def backfill_trades(
     end: str = typer.Option(..., help="Day after the last, YYYY-MM-DD (exclusive)"),
     workers: int = typer.Option(2, help="Days fetched in parallel, sharing the read budget"),
 ):
-    """Every non-combo trade in [start, end), one Parquet file per finished UTC day.
+    """Every trade but KXMVE combos' in [start, end), one Parquet file per finished UTC day.
     Resumable: days already on disk are skipped."""
     paths = bf.backfill_trades(
         bf.public_clients(workers),
@@ -157,9 +157,9 @@ def record(
     rest: bool = typer.Option(False, help="Keyless REST book snapshots instead (needs --series)"),
     every: float = typer.Option(10, min=1, help="With --rest: seconds between snapshot rounds"),
 ):
-    """Record raw WebSocket frames for open non-combo markets (needs the read-only data key),
-    or, with --rest, keyless REST snapshots of their full books. Runs until stopped; logs
-    coverage to raw/ws (or raw/rest)/coverage.jsonl."""
+    """Record raw WebSocket frames for open markets but KXMVE combos (needs the read-only
+    data key), or, with --rest, keyless REST snapshots of their full books. Runs until
+    stopped; logs coverage to raw/ws (or raw/rest)/coverage.jsonl."""
     if rest and not series:
         raise typer.BadParameter("--rest needs --series: every open market is too many "
                                  "requests per round")

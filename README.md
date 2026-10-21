@@ -16,7 +16,7 @@ rules: [AGENTS.md](AGENTS.md).
 
 ```bash
 kalshibot markets --series KXHIGHNY      # live top of book for one series
-kalshibot backfill reference             # series, events, non-combo markets, fees, incentive programs
+kalshibot backfill reference             # series, events, markets (no KXMVE combos), fees, incentive programs
 kalshibot backfill trades --start YYYY-MM-DD --end YYYY-MM-DD   # trade tape by UTC day
 kalshibot research discover FAMILY       # a family's configurations on discovery, logged
 kalshibot research candles FAMILY        # the quotes its confirmation test needs

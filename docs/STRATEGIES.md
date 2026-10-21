@@ -75,7 +75,10 @@ selects by Sharpe) to −2.32¢ (YES at YES ≥ 80¢); NO at YES ≤ 10–20¢ a
 fees (+0.2¢ to +0.6¢) and lose to the fee. Two investigations found no bug affecting the
 result: a rerun of the runner's pieces reproduced two configurations exactly, and an
 independent rebuild matched all nine to within 4 positions and about 0.04¢ a position
-(`data/exploration/2026-10-h1-discovery/`, local only).
+(`data/exploration/2026-10-h1-discovery/`, local only). These trials read combos outside
+the KXMVE collections, which the loader drops since 2026-10-21 ([RESEARCH §1](RESEARCH.md)):
+two of each NO configuration's positions and none of the YES configurations'. H1 is
+withdrawn, so they were not rerun.
 
 The [positive control](BACKTESTING.md#positive-control) doesn't contradict these losses.
 Its longshot loss is the favorite makers' gain: NO makers opposite YES takers at 0–5¢

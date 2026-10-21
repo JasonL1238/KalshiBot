@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pandas as pd
+import pyarrow.parquet as pq
 import pytest
 
 from kalshibot.data import backfill as bf
@@ -71,6 +72,24 @@ def test_markets_are_point_in_time(loader):
     assert before.loc["A", "rules_primary"] == "If ..."
     after = loader.markets(D(2025, 12, 2)).df().set_index("ticker")
     assert after.loc["A", "result"] == "yes" and after.loc["B", "volume"] == 900
+
+
+def test_non_mve_combos_never_reach_research(loader):
+    """Combos outside the KXMVE collections stay in the tables and are dropped here, by
+    their custom_strike key, not by any text that names it."""
+    kalshi = loader.kalshi_dir
+    markets = pq.read_table(kalshi / "markets.parquet").to_pylist()
+    combo = {**markets[0], "ticker": "KXCOMBO-25OCT01-X", "event_ticker": "KXCOMBO-25OCT01",
+             "custom_strike": '{"Associated Markets": "A,B"}'}
+    press = {**markets[0], "ticker": "KXPRESS-25OCT01", "event_ticker": "KXPRESS",
+             "custom_strike": '{"Note": "Associated Markets"}'}
+    bf._write([*markets, combo, press], kalshi / "markets.parquet", bf.MARKET_SCHEMA)
+    day = bf.trades_path(kalshi, D(2025, 10, 1).date())
+    trade = pq.read_table(day).to_pylist()[0]
+    bf._write([trade, *({**trade, "trade_id": m["ticker"], "ticker": m["ticker"]}
+                        for m in (combo, press))], day, bf.TRADE_SCHEMA)
+    assert set(loader.markets(D(2025, 12, 2)).df().ticker) == {"A", "B", "C", press["ticker"]}
+    assert set(loader.trades(D(2025, 10, 1), D(2025, 10, 2)).df().ticker) == {"A", press["ticker"]}
 
 
 WINDOW = [(D(2025, 10, 1), D(2025, 10, 11))]

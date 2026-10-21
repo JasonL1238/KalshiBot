@@ -10,7 +10,7 @@ from kalshibot.data.backfill import COMBO_PREFIX
 from kalshibot.kalshi.fee_history import FeeTerms
 from kalshibot.kalshi.models import on_tick
 from kalshibot.research.calendar import BECKER_END, DISCOVERY_START
-from kalshibot.research.load import Loader, connect
+from kalshibot.research.load import NON_MVE_COMBO, Loader, connect
 
 pytestmark = pytest.mark.data
 BECKER = data_dir() / "external" / "becker" / "data" / "kalshi" / "trades" / "*.parquet"
@@ -96,6 +96,17 @@ def test_every_trade_has_a_market():
         SELECT coalesce(sum(n) FILTER (WHERE m.ticker IS NULL), 0), sum(n)
         FROM t LEFT JOIN read_parquet('{API}/markets.parquet') m USING (ticker)""").fetchone()
     assert orphans == 0, f"{orphans} of {total} trades have no row in markets.parquet"
+
+
+def test_non_mve_combo_prefixes_hold_only_combos():
+    """The Loader drops non-KXMVE combos' trades by prefix (research/load.py, NON_MVE_COMBO)."""
+    if not (API / "markets.parquet").exists():
+        pytest.skip("markets not downloaded yet")
+    mixed = connect().sql(f"""
+        SELECT split_part(m.ticker, '-', 1) FROM read_parquet('{API}/markets.parquet') m
+        GROUP BY ALL HAVING bool_or({NON_MVE_COMBO})
+                        AND NOT bool_and({NON_MVE_COMBO})""").fetchall()
+    assert not mixed, f"prefixes holding combos and other markets: {mixed}"
 
 
 def test_trades_sit_on_their_market_tick_grid():

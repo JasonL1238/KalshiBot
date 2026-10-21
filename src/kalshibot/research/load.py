@@ -3,11 +3,11 @@
 Research code reads market data only through `Loader`, so the calendar and the
 look-ahead rules are enforced in one place:
 
-- One trade tape, Kalshi's API, combos excluded (`data/backfill.py`), and 1-minute
-  candles (`candles`) where a family fetched them. Becker's dataset is only a
-  cross-check: it lacks whole markets (docs/RESEARCH.md §1, Historical data). Asking
-  for trade days or candle files that aren't on disk, or for days that haven't finished,
-  raises `MissingData` instead of returning less.
+- One trade tape, Kalshi's API, combos excluded (KXMVE ones at fetch, the rest here:
+  `NON_MVE_COMBO`), and 1-minute candles (`candles`) where a family fetched them.
+  Becker's dataset is only a cross-check: it lacks whole markets (docs/RESEARCH.md §1,
+  Historical data). Asking for trade days or candle files that aren't on disk, or for
+  days that haven't finished, raises `MissingData` instead of returning less.
 - No lockbox data: reading trades or candles in [LOCKBOX_START, FORWARD_START) raises
   `LockboxError`, and outcomes of markets that settled then stay hidden, until the
   ledger's one unlock names this loader's `family` as a survivor. The forward window is
@@ -24,6 +24,7 @@ import hashlib
 import tempfile
 import uuid
 from datetime import UTC, date, datetime, timedelta
+from functools import cached_property
 from pathlib import Path
 
 import duckdb
@@ -46,6 +47,10 @@ POST_HOC = ["close_time", "expected_expiration_time", "expiration_time", "occurr
             "settlement_ts", "status", "result", "settlement_value", "expiration_value",
             "volume", "open_interest", "price_level_structure", "price_ranges", "updated_time"]
 META = ["source", "fetched_at"]
+# A combo outside the KXMVE collections (docs/RESEARCH.md §1, Data formats). Each ticker
+# prefix holding one holds only those (tests/test_data_integrity.py), so the tape drops
+# them by it: a prefix first listed after markets.parquet was fetched gets through.
+NON_MVE_COMBO = """coalesce(m.custom_strike, '') LIKE '%"Associated Markets":%'"""
 # A market's series: its event's, or (some 13k markets have no event row) the event
 # ticker's prefix, which names the series for 98% of events
 SERIES = "coalesce(e.series_ticker, split_part(m.event_ticker, '-', 1))"
@@ -85,10 +90,10 @@ class Loader:
         return survivors is not None and self.family in survivors
 
     def trades(self, start: datetime, end: datetime) -> duckdb.DuckDBPyRelation:
-        """Trades with created_time in [start, end). DuckDB sizes this multi-file scan from
-        its first day's file, and the tape grows, so a long window looks far smaller than it
-        is (discovery: ~200k rows for 72.5M) and a join builds its hash table on the trades.
-        Aggregate them before joining a big table."""
+        """Trades with created_time in [start, end), combo trades aside. DuckDB sizes this
+        multi-file scan from its first day's file, and the tape grows, so a long window looks
+        far smaller than it is (discovery: ~200k rows for 72.5M) and a join builds its hash
+        table on the trades. Aggregate them before joining a big table."""
         start, end = _utc(start), _utc(end)
         if start < FORWARD_START and end > LOCKBOX_START and not self._lockbox_open():
             raise LockboxError(f"[{start}, {end}) overlaps the lockbox [{LOCKBOX_START}, "
@@ -105,7 +110,14 @@ class Loader:
         return self._con.sql(
             f"SELECT * FROM read_parquet({_sql([trades_path(self._kalshi, d) for d in days])}, "
             f"hive_partitioning = false) WHERE created_time >= {_sql(start)} "
-            f"AND created_time < {_sql(end)}")
+            f"AND created_time < {_sql(end)} AND NOT list_contains("
+            f"{_sql(self._non_mve_combo_prefixes)}::VARCHAR[], split_part(ticker, '-', 1))")
+
+    @cached_property
+    def _non_mve_combo_prefixes(self) -> list[str]:
+        return [s for (s,) in self._con.sql(
+            f"SELECT DISTINCT split_part(m.ticker, '-', 1) FROM "
+            f"read_parquet({_sql(self._parquet('markets'))}) m WHERE {NON_MVE_COMBO}").fetchall()]
 
     def _candle_paths(self, wanted: pd.DataFrame) -> list[Path]:
         return [candles_path(self._kalshi, t, pd.Timestamp(d).date())
@@ -133,9 +145,9 @@ class Loader:
             f"SELECT * FROM read_parquet({_sql(paths)}, hive_partitioning = false)")
 
     def markets(self, as_of: datetime) -> duckdb.DuckDBPyRelation:
-        """Markets listed by `as_of`, with their series and category; post-hoc columns are
-        NULL unless the market settled before `as_of`. Every market has a series
-        (`SERIES`)."""
+        """Markets listed by `as_of`, combos aside, with their series and category;
+        post-hoc columns are NULL unless the market settled before `as_of`. Every market has
+        a series (`SERIES`)."""
         cutoff = _sql(as_of)
         known = f"m.settlement_ts < {cutoff}"
         if not self._lockbox_open():  # lockbox-era outcomes stay hidden
@@ -148,7 +160,8 @@ class Loader:
             f"SELECT {', '.join(cols)} FROM read_parquet({_sql(self._parquet('markets'))}) m "
             f"LEFT JOIN read_parquet({_sql(self._parquet('events'))}) e USING (event_ticker) "
             f"LEFT JOIN read_parquet({_sql(self._parquet('series'))}) s "
-            f"ON s.series_ticker = {SERIES} WHERE m.created_time < {cutoff}")
+            f"ON s.series_ticker = {SERIES} WHERE m.created_time < {cutoff} "
+            f"AND NOT {NON_MVE_COMBO}")
 
     def fetched(self) -> datetime | None:
         """When the markets and events tables were fetched (their oldest row; None if
@@ -196,10 +209,10 @@ def connect() -> duckdb.DuckDBPyConnection:
 
 
 def _sql(value: datetime | str | Path | list) -> str:
-    """A SQL literal for a UTC time, a path or a list of paths. DuckDB runs a query with
-    parameters at once and keeps its whole result; with literals a relation stays lazy, so
-    the projections, filters and joins callers add run as one streamed query over the
-    Parquet files."""
+    """A SQL literal for a UTC time, a path, a string or a list of them. DuckDB runs a
+    query with parameters at once and keeps its whole result; with literals a relation
+    stays lazy, so the projections, filters and joins callers add run as one streamed
+    query over the Parquet files."""
     if isinstance(value, list):
         return f"[{', '.join(_sql(v) for v in value)}]"
     if isinstance(value, datetime):

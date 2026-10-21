@@ -184,8 +184,8 @@ async def record(signer: KalshiSigner, tickers: Callable[[], list[str]], out: Pa
 
 
 def open_markets(client: KalshiClient, series: list[str] | None) -> list[dict]:
-    """The open non-combo markets of `series` (every series when None): what a recorder
-    captures."""
+    """The open markets but KXMVE combos of `series` (every series when None): what a
+    recorder captures."""
     return [m for s in (series or [None])
             for m in client.iter_markets(series_ticker=s, status="open", mve_filter="exclude")]
 

@@ -11,11 +11,12 @@
                           trade price OHLC, volume, open interest), fetched only for
                           the markets and days a research family needs
 
-Prices and sizes are the fixed-point units of kalshi.models; times are UTC. Combo
-(multivariate) rows are dropped from every table (`is_combo`). Each row records when it
-was observed (`fetched_at`). Columns such as `result`, `close_time` (which moves on early
-close), and `volume` are only final after settlement; research/load.py decides what is
-visible when. API behaviors relied on here are in docs/RESEARCH.md §1.
+Prices and sizes are the fixed-point units of kalshi.models; times are UTC. KXMVE combo
+rows are dropped from every table (`is_combo`); other combos stay
+(`research.load.NON_MVE_COMBO`). Each row records when it was observed (`fetched_at`).
+Columns such as `result`, `close_time` (which moves on early close), and `volume` are
+only final after settlement; research/load.py decides what is visible when. API
+behaviors relied on here are in docs/RESEARCH.md §1.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ COMBO_PREFIX = "KXMVE"  # multivariate combo series, events, and markets
 
 
 def is_combo(ticker: str) -> bool:
-    """Combos are excluded from research (and from every table here)."""
+    """KXMVE combos, which research never sees (and no table here keeps)."""
     return ticker.startswith(COMBO_PREFIX)
 
 

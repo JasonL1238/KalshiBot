@@ -155,7 +155,7 @@ class KalshiClient:
         max_close_ts: int | None = None,
         mve_filter: str | None = None,
     ) -> Iterator[dict[str, Any]]:
-        """status: unopened | open | closed | settled; mve_filter: only | exclude (combos)."""
+        """status: unopened | open | closed | settled; mve_filter: only | exclude (KXMVE combos)."""
         return self._paginate("/markets", "markets", {
             "series_ticker": series_ticker,
             "event_ticker": event_ticker,

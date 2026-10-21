@@ -37,9 +37,10 @@ API keys, so use it for all execution testing.
 - [docs: API keys](https://docs.kalshi.com/getting_started/api_keys)
 
 ### Public market data (no auth) ✅
-- `GET /markets` (filters: `series_ticker`, `event_ticker`, `status` = open|closed|settled…,
-  `mve_filter` = only|exclude for combo markets, `limit` ≤ 1000, `cursor`). Responses say
-  `status: "active"` but the filter value is `open`.
+- `GET /markets` (filters: `series_ticker`, `event_ticker`, `status` =
+  open|closed|settled…, `mve_filter` = only|exclude for KXMVE combos (others: Data
+  formats), `limit` ≤ 1000, `cursor`). Responses say `status: "active"` but the filter
+  value is `open`.
 - `GET /series` returns every series (~15k) in one response; `GET /series/{t}` one series.
 - `GET /events` (`limit` ≤ 200) covers settled events too; there is no `/historical/events`.
 - `GET /series/fee_changes?show_historical=true`: logged per-series fee changes. The log
@@ -48,7 +49,11 @@ API keys, so use it for all execution testing.
 - `GET /markets/{t}/orderbook?depth=`, plus **`GET /markets/orderbooks?tickers=A&tickers=B`**
   (≤ 100 at once, all from the same instant)
 - `GET /markets/trades` and `/historical/trades` take `min_ts` (inclusive) and `max_ts`
-  (**exclusive**), in whole seconds.
+  (**exclusive**), in whole seconds, and serve combo prints with the rest (they take no
+  series filter). `taker_side` is deprecated for `taker_outcome_side`/`taker_book_side`
+  but still served (2026-10-21; [docs](https://docs.kalshi.com/api-reference/market/get-trades)).
+- `GET /multivariate_event_collections` lists the open combo collections and their leg
+  series.
 - Candlesticks (1, 60, or 1440 min; OHLC of `yes_bid`, `yes_ask`, and trade price, plus
   volume and open interest): `GET /series/{s}/markets/{t}/candlesticks` for live markets
   and `/historical/markets/{t}/candlesticks` for archived ones; the live endpoint 404s
@@ -63,7 +68,8 @@ API keys, so use it for all execution testing.
   than it leave the live endpoints and are served only by `/historical/*`. Read the
   current cutoffs (`market_settled_ts`, `trades_created_ts`) from `GET /historical/cutoff`.
   `data/backfill.py` picks the archive per day.
-- `/historical/markets` accepts `mve_filter=exclude` but returns 400 for `mve_filter=only`.
+- `/historical/markets` accepts `mve_filter=exclude` but returns 400 for `mve_filter=only`;
+  `?series_ticker=KXMVE…` works, 1,000 combos a page with their legs (`mve_selected_legs`).
 - History goes back to the start of each series (NYC highs: Aug 2021) at trade level.
 - **No historical orderbook depth anywhere.** You only get book data by recording it
   yourself, so run the recorder early and keep it running.
@@ -126,6 +132,11 @@ API keys, so use it for all execution testing.
   `[price, size]` string pairs, and a side's key is omitted when that side is empty.
   `orderbook_delta` msgs carry `price_dollars`, a signed `delta_fp`, `side`, and `ts_ms`.
   Every msg has `sid` and `seq`, which must be contiguous per subscription.
+- Combos outside the KXMVE collections (multi-city weather and award shows from late 2024,
+  Kalshi's pre-packed parlays from October 2025, a few others) have no
+  `mve_collection_ticker` or `mve_selected_legs` (checked on KXCITIESWEATHER and
+  KXNFLPREPACK), so `mve_filter=exclude` lets them through. They name their legs
+  under `custom_strike`'s "Associated Markets" key (`research.load.NON_MVE_COMBO`).
 
 ### Orders
 - Use **V2** endpoints: `POST /portfolio/events/orders`. Legacy `/portfolio/orders` is dead.
@@ -144,6 +155,14 @@ API keys, so use it for all execution testing.
   ([docs](https://docs.kalshi.com/api-reference/orders/get-queue-positions-for-orders)).
 - Order responses carry the matching engine's `ts_ms`, and WebSocket messages
   `sending_ts_ms` (since 2026-10-01), so feed and order latency can be measured.
+- A KXMVE combo is created (`POST /multivariate_event_collections/{t}`) and priced by
+  request for quote: any member may quote (Rule 5.3(B)(b),
+  [filing](https://www.cftc.gov/sites/default/files/filings/orgrules/26/01/rules01302638537.pdf))
+  on the authenticated `communications` channel, confirming within 3 s
+  ([docs](https://docs.kalshi.com/getting_started/rfqs)); then it has its own public book.
+  Yes pays the product of the legs' payouts, rounded down to the cent, and a leg that
+  fails resolves it No at once
+  ([terms](https://assets.kalshi.com/contract_terms/FOOTBALLSTATS.pdf)).
 - [docs: create order v2](https://docs.kalshi.com/api-reference/orders/create-order-v2)
 
 ### Fees
@@ -151,9 +170,14 @@ API keys, so use it for all execution testing.
   shares by `fee_type`, dated regimes) in `kalshibot.kalshi.fee_history`.
 - Read `fee_type` / `fee_multiplier` from `GET /series/{t}`, and upcoming changes from
   `GET /series/fee_changes`. Never hard-code them.
-- ✅ Makers pay on series typed `quadratic_with_maker_fees` and on combos
-  (`quadratic_with_combo_maker_fees`; shares in `fee_history.MAKER_SHARE`): 160 of 14,719
-  series on 2026-10-08, among them sports
+- ✅ Makers pay on series typed `quadratic_with_maker_fees` and, since 2026-08-20, on three
+  combo series (`quadratic_with_combo_maker_fees`; shares in
+  `fee_history.MAKER_SHARE`). Combos of independent NFL legs (KXMVECROSSCATEGORY0) pay
+  none. When a combo's quoter executes against an order that has rested under 5 s, the
+  quoter pays the maker fee and the resting side the taker fee
+  ([changelog](https://docs.kalshi.com/changelog),
+  [filing](https://www.cftc.gov/filings/orgrules/rules0712269458.pdf)). Maker-fee series
+  were 160 of 14,719 on 2026-10-08, among them sports
   games, props and futures, economic releases, index yearly ranges, GPU prices and
   awards. Crypto hourly and 15-minute (KXBTCD, KXBTC15M) and weather (`KXHIGHNY`:
   `quadratic`, multiplier 1) charge makers nothing. Since discovery, maker fees reached
@@ -172,10 +196,12 @@ API keys, so use it for all execution testing.
   market and window, with `status` upcoming, active, closed or paid_out; ended ones stay
   served. On 2026-10-09 most active programs ran for a day or a week, and most others
   for 15 minutes.
-- The **Volume Incentive Program** ends no earlier than 2026-10-13
-  ([CFTC filing](https://www.cftc.gov/filings/orgrules/rules09282630083.pdf)); CFTC staff
-  letter [26-23](https://www.cftc.gov/csl/26-23/download) warns exchanges against
-  incentives that guarantee profits.
+- The **Volume Incentive Program** was to end no earlier than 2026-10-13
+  ([CFTC filing](https://www.cftc.gov/filings/orgrules/rules09282630083.pdf)); the last
+  volume program in `GET /incentive_programs` (fetched 2026-10-14) ended 2026-09-20 03:59
+  UTC. CFTC staff letter
+  [26-23](https://www.cftc.gov/csl/26-23/download) warns exchanges against incentives that
+  guarantee profits.
 - The **Market Maker Program** gives designated firms lower fees and position
   accountability levels 10× normal; its terms are confidential
   ([CFTC filing](https://www.cftc.gov/filings/orgrules/rules0603265168.pdf)). SIG has
@@ -210,8 +236,10 @@ defaults to ≤ 10 req/s.
 
 ### Operational gotchas
 - **Weekly maintenance: Thursdays 3–5 AM ET.** Trading pauses; reconnect sockets after.
-- **Exchange sharding:** weather is on shard 0, crypto on shard 2. Collateral must sit on the
-  right shard (`/portfolio/intra_exchange_instance_transfer` or auto-rebalance).
+- **Exchange sharding** (new events): weather is on shard 0, combos on 1, commodities and
+  crypto on 2, and tennis, baseball and basketball on 3
+  ([docs](https://docs.kalshi.com/getting_started/exchange_sharding)). Collateral must sit
+  on the right shard (`/portfolio/intra_exchange_instance_transfer` or auto-rebalance).
 - Official Python SDK (`kalshi_python_sync`) requires Python ≥ 3.13 and can lag the API.
   We use our own thin client instead, which is also more educational.
 - API keys need a current **location attestation** for sports/elections trading (not weather).

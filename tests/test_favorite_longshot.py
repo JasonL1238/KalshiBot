@@ -32,6 +32,7 @@ def tape(tmp_path, monkeypatch):
                  "count": 1000, "taker_side": "yes", "is_block_trade": block}
                 for k, (t, ts, p, block) in enumerate(PRINTS) if T(ts).date() == day]
         bf._write(rows, bf.trades_path(kalshi, day), bf.TRADE_SCHEMA)
+    bf._write([], kalshi / "markets.parquet", bf.MARKET_SCHEMA)
     return Loader(tmp_path)
 
 
