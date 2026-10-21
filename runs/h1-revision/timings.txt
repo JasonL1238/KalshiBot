@@ -22,3 +22,4 @@ unchanged-yes-0.1 rc=0 wall=235s args=0.1 --only 'YES family'
 unchanged-edge1-0.1 rc=0 wall=148s args=0.1 --only '1¢ lower NO asks on q < 0.15'
 final-h1-1.0 rc=0 wall=36043s args=1.0 --only 'H1-shaped:'
 final-h1-held-out-1.0 rc=0 wall=19755s args=1.0 --only 'H1-shaped (held out)'
+final-power-1.0 rc=0 wall=16966s args=power 1.0
